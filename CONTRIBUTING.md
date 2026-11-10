@@ -30,6 +30,10 @@ codex plugin marketplace add ./
 
 ## Pull requests
 
+Titles follow `type(scope): summary`, for example
+`fix(engine): match secret names case-insensitively`, and a check enforces it.
+See [names and descriptions](https://github.com/Nodrail/.github/blob/main/CONTRIBUTING.md#names-and-descriptions).
+
 - Keep both plugins on the same version, and raise it when users would notice the
   change. Merging a new version tags it and writes its release.
 - Describe how you tried it, with which agent and version.

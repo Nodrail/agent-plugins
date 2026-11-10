@@ -27,6 +27,20 @@
             "onFailure": "block"
           }
         ]
+      },
+      {
+        "matcher": "^(Read|Glob|Grep)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/nodrail-hook.mjs"
+            ],
+            "timeout": 30,
+            "onFailure": "block"
+          }
+        ]
       }
     ],
     "PostToolUse": [

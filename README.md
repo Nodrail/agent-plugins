@@ -59,7 +59,7 @@ Self-hosting? Also set `NODRAIL_URL`.
 | MCP tools        | Yes                              | Yes                                   |
 | Web              | Yes                              | No: hosted search runs on OpenAI's side |
 | New tools        | Yes, by default                  | No: governed tools are listed by name |
-| Read-only tools  | No                               | No                                    |
+| Reads (Read, Grep, Glob) | Checked on your machine for places credentials live, not sent to Nodrail | Through the shell, like any command |
 
 A patch that touches several files, or renames one, is its own operation (tool
 `files`, operation `file.patch`), so a rule for one folder can't let a second
