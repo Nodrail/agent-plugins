@@ -1,10 +1,5 @@
 #!/usr/bin/env node
 
-// ../policy-engine/src/actions.ts
-import { realpathSync } from "node:fs";
-import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
-
 // ../policy-engine/src/secrets.ts
 var SECRET_PLACES = [
   ".env",
@@ -43,8 +38,12 @@ var SECRET_PAIRS = [
 ];
 function reachesSecret(params) {
   if (params.reaches_secrets === true) return true;
-  const parts = Array.isArray(params.path_parts) ? params.path_parts.filter((part) => typeof part === "string") : [];
-  return parts.some(isSecretName) || SECRET_PAIRS.some((pair) => pair.parts.every((part) => parts.includes(part)));
+  const parts = Array.isArray(params.path_parts) ? params.path_parts.filter(
+    (part) => typeof part === "string"
+  ) : [];
+  return parts.some(isSecretName) || SECRET_PAIRS.some(
+    (pair) => pair.parts.every((part) => parts.includes(part))
+  );
 }
 var KEY_EXTENSIONS = /* @__PURE__ */ new Set(["pem", "key", "p12", "pfx"]);
 function nameForms(part) {
@@ -110,21 +109,21 @@ function inSet(set, char) {
   }
   return false;
 }
+function fits(token, char) {
+  if ("one" in token) return true;
+  if ("set" in token) return inSet(token.set, char) !== token.negate;
+  return "char" in token && token.char === char;
+}
 function matchesPart(pattern, name) {
-  let row = Array.from({ length: name.length + 1 }, () => false);
-  row[0] = true;
+  let row = Array.from({ length: name.length + 1 }, (_, at) => at === 0);
   for (const token of pattern) {
     const next = Array.from({ length: name.length + 1 }, () => false);
-    if ("any" in token) {
-      next[0] = row[0] ?? false;
+    if ("any" in token)
+      for (let at = 0; at <= name.length; at += 1)
+        next[at] = (row[at] ?? false) || at > 0 && (next[at - 1] ?? false);
+    else
       for (let at = 1; at <= name.length; at += 1)
-        next[at] = (row[at] ?? false) || (next[at - 1] ?? false);
-    } else
-      for (let at = 1; at <= name.length; at += 1) {
-        const char = name[at - 1] ?? "";
-        const fits = "one" in token || "set" in token && inSet(token.set, char) !== token.negate || "char" in token && token.char === char;
-        next[at] = fits && (row[at - 1] ?? false);
-      }
+        next[at] = (row[at - 1] ?? false) && fits(token, name[at - 1] ?? "");
     row = next;
   }
   return row[name.length] ?? false;
@@ -165,29 +164,33 @@ var wrappers = new Set(
 var python = /^python[0-9.]*$/;
 var riskyArgument = /^(?:-c|-e|-exec|-execdir|-ok|-okdir|-delete|-fprint.*|-fls|--eval|--expression(?:=.*)?|--(?:exec|output|rsh|to-command|checkpoint-action|use-compress-program|upload-pack|receive-pack|open-files-in-pager|pre|config-env|compress-program|unzip-command|pager)(?:=.*)?)$/;
 var packageManagerFlags = /^--(?:script-shell|shell|config\..+|prefix|dir|userconfig|globalconfig|node-options|call|workspace-root)(?:=.*)?$/;
-var riskyByProgram = new Map(Object.entries({
-  // -u is clone's --upload-pack; --config and --template can set a command or
-  // install hooks that run on the next git command.
-  git: /^(?:-x|-O.*|-u.*|--config(?:=.*)?|--template(?:=.*)?)$/,
-  zip: /^(?:-TT.*|--unzip-command(?:=.*)?)$/,
-  man: /^(?:-P.*|--pager(?:=.*)?|-H.*|--html(?:=.*)?)$/,
-  tar: /^(?:-I.*|-[a-zA-Z]*I)$/,
-  rsync: /^-e.*$/,
-  curl: /^(?:-[oOKTdF].*|--(?:output|remote-name|config|upload-file|data.*|form.*|json)(?:=.*)?)$/,
-  wget: /^(?:-[oO].*|--(?:output-document|output-file|post-file)(?:=.*)?)$/,
-  dd: /^of=/,
-  make: /^(?:-[fC].*|--(?:file|makefile|directory|eval)(?:=.*)?)$/,
-  // Settings that swap the shell scripts run in, or where config comes from.
-  npm: packageManagerFlags,
-  pnpm: packageManagerFlags,
-  yarn: packageManagerFlags
-}));
-var riskySubcommands = new Map(Object.entries({
-  git: /^(?:bisect|submodule|filter-branch|difftool|mergetool|config|alias|credential|hook)$/,
-  npm: /^(?:exec|x)$/,
-  pnpm: /^(?:exec|dlx)$/,
-  yarn: /^(?:exec|dlx)$/
-}));
+var riskyByProgram = new Map(
+  Object.entries({
+    // -u is clone's --upload-pack; --config and --template can set a command or
+    // install hooks that run on the next git command.
+    git: /^(?:-x|-O.*|-u.*|--config(?:=.*)?|--template(?:=.*)?)$/,
+    zip: /^(?:-TT.*|--unzip-command(?:=.*)?)$/,
+    man: /^(?:-P.*|--pager(?:=.*)?|-H.*|--html(?:=.*)?)$/,
+    tar: /^(?:-I.*|-[a-zA-Z]*I)$/,
+    rsync: /^-e.*$/,
+    curl: /^(?:-[oOKTdF].*|--(?:output|remote-name|config|upload-file|data.*|form.*|json)(?:=.*)?)$/,
+    wget: /^(?:-[oO].*|--(?:output-document|output-file|post-file)(?:=.*)?)$/,
+    dd: /^of=/,
+    make: /^(?:-[fC].*|--(?:file|makefile|directory|eval)(?:=.*)?)$/,
+    // Settings that swap the shell scripts run in, or where config comes from.
+    npm: packageManagerFlags,
+    pnpm: packageManagerFlags,
+    yarn: packageManagerFlags
+  })
+);
+var riskySubcommands = new Map(
+  Object.entries({
+    git: /^(?:bisect|submodule|filter-branch|difftool|mergetool|config|alias|credential|hook)$/,
+    npm: /^(?:exec|x)$/,
+    pnpm: /^(?:exec|dlx)$/,
+    yarn: /^(?:exec|dlx)$/
+  })
+);
 var namesASecret = (words) => words.slice(1).some((word) => word.split(/[:=]/).some(fragmentReachesSecret));
 function fragmentReachesSecret(fragment) {
   if (fragment.length <= 256) return globCouldReachSecret(fragment);
@@ -234,6 +237,13 @@ function splitWords(line) {
 }
 var render = (words) => words.map((word) => /^[^\s"']+$/.test(word) ? word : JSON.stringify(word)).join(" ");
 var MAX_CHAIN_PARTS = 20;
+function separatorLength(text, index) {
+  const char = text[index] ?? "";
+  const doubled = text[index + 1] === char;
+  if (char === "&" && !doubled) return null;
+  if (doubled && (char === ";" || char === "\n")) return null;
+  return doubled ? 2 : 1;
+}
 function splitChain(text) {
   const parts = [];
   let part = "";
@@ -247,10 +257,9 @@ function splitChain(text) {
       part += char;
       continue;
     }
-    const doubled = text[index + 1] === char;
-    if (char === "&" && !doubled) return null;
-    if (doubled && (char === ";" || char === "\n")) return null;
-    if (doubled) index += 1;
+    const length = separatorLength(text, index);
+    if (length === null) return null;
+    index += length - 1;
     parts.push(part);
     part = "";
   }
@@ -488,11 +497,8 @@ var actionDigest = (actionId, digest) => sha256(`nodrail:action:v1
 ${actionId}
 ${digest}`);
 
-// ../policy-engine/src/actions.ts
-var MAX_RESOURCE = 512;
+// ../policy-engine/src/redact.ts
 var MAX_INLINE_INPUT = 16 * 1024;
-var MAX_COMMAND_ID = MAX_RESOURCE - 42;
-var nonEmptyText = (value) => typeof value === "string" && value ? value : null;
 var REDACTED = "[redacted]";
 var sensitiveWord = /token|secret|passw(?:or)?d|pwd|api[_-]?key|[_-]keys?$|credential|authorization/i;
 var secretValue = `"(?![^"]*[$\`])[^"]*"|'[^']*'|(?![^\\s&;|]*[$\`])[^\\s&;|]+`;
@@ -518,7 +524,10 @@ var secretPatterns = [
   [/(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}/g, REDACTED],
   // Stripe, GitLab, Google and npm.
   [/(?<![A-Za-z0-9])[sr]k_(?:live|test)_[A-Za-z0-9]{10,}/g, REDACTED],
-  [/glpat-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35}|npm_[A-Za-z0-9]{36}/g, REDACTED]
+  [
+    /glpat-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35}|npm_[A-Za-z0-9]{36}/g,
+    REDACTED
+  ]
 ];
 var nameChars = /[A-Za-z0-9_-]+/g;
 var assignmentAt = /=|:\s*/y;
@@ -588,42 +597,11 @@ function redactJson(value) {
     );
   return value;
 }
-var clip = (value, max) => value.length <= max ? value : `${value.slice(0, max)}\u2026 [shortened]`;
-function commandAction(shape, original, extra) {
-  const visible = bounded(shape.text);
-  const shown = redactCommand(visible);
-  const hidden = shown !== visible;
-  const shortened = shape.text.length > MAX_COMMAND_ID;
-  let operation = shape.operation;
-  if (hidden) operation = "command.redacted";
-  else if (shortened) operation = "command.compound";
-  const commandSha = fingerprint(original);
-  const id = clip(shown, MAX_COMMAND_ID);
-  return {
-    tool: "shell",
-    operation,
-    resource: {
-      kind: "command",
-      id: hidden || shortened ? `${id} #${commandSha.slice(7, 19)}` : id
-    },
-    params: {
-      // Reviewers read this; the fingerprint binds the exact original.
-      command: clip(shown, MAX_INLINE_INPUT),
-      command_sha256: commandSha,
-      // A hidden part can't be judged by what is visible, so never split one.
-      ...shape.parts && !hidden ? { parts: shape.parts } : {},
-      ...extra
-    }
-  };
-}
-function shellCall(name, input) {
-  const command = nonEmptyText(input.command);
-  if (!command?.trim()) return null;
-  return commandAction(classifyCommand(command), command, {
-    shell: name,
-    background: input.run_in_background === true
-  });
-}
+
+// ../policy-engine/src/paths.ts
+import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 function canonicalPath(path) {
   const missing = [];
   let existing = path;
@@ -663,8 +641,53 @@ function insideAll(paths, cwd) {
   const root = cwd ? fullPath(cwd, null) : null;
   return root ? { inside_cwd: paths.every((path) => isWithin(path, root)) } : {};
 }
+function containsHome(path) {
+  const home = canonicalPath(homedir());
+  return isWithin(home, path);
+}
+
+// ../policy-engine/src/actions.ts
+var MAX_RESOURCE = 512;
+var MAX_COMMAND_ID = MAX_RESOURCE - 42;
+var nonEmptyText = (value) => typeof value === "string" && value ? value : null;
+var clip = (value, max) => value.length <= max ? value : `${value.slice(0, max)}\u2026 [shortened]`;
+function commandAction(shape, original, extra) {
+  const visible = bounded(shape.text);
+  const shown = redactCommand(visible);
+  const hidden = shown !== visible;
+  const shortened = shape.text.length > MAX_COMMAND_ID;
+  let operation = shape.operation;
+  if (hidden) operation = "command.redacted";
+  else if (shortened) operation = "command.compound";
+  const commandSha = fingerprint(original);
+  const id = clip(shown, MAX_COMMAND_ID);
+  return {
+    tool: "shell",
+    operation,
+    resource: {
+      kind: "command",
+      id: hidden || shortened ? `${id} #${commandSha.slice(7, 19)}` : id
+    },
+    params: {
+      // Reviewers read this; the fingerprint binds the exact original.
+      command: clip(shown, MAX_INLINE_INPUT),
+      command_sha256: commandSha,
+      // A hidden part can't be judged by what is visible, so never split one.
+      ...shape.parts && !hidden ? { parts: shape.parts } : {},
+      ...extra
+    }
+  };
+}
+function shellCall(name, input) {
+  const command = nonEmptyText(input.command);
+  if (!command?.trim()) return null;
+  return commandAction(classifyCommand(command), command, {
+    shell: name,
+    background: input.run_in_background === true
+  });
+}
 var MAX_PATCH_FILES = 1e3;
-function fileCall(operation, pathField, input, cwd, content) {
+function fileCall({ operation, pathField, content }, input, cwd) {
   const raw = nonEmptyText(input[pathField]);
   if (!raw) return null;
   const path = fullPath(raw, cwd);
@@ -678,13 +701,9 @@ function fileCall(operation, pathField, input, cwd, content) {
       path,
       path_parts: partsOf(path),
       ...insideCwd(path, cwd),
-      content_sha256: fingerprint(content)
+      content_sha256: fingerprint(content(input))
     }
   };
-}
-function containsHome(path) {
-  const home = canonicalPath(homedir());
-  return isWithin(home, path);
 }
 function globRoot(pattern) {
   const fixed = [];
@@ -758,8 +777,7 @@ function patchHeaders(patch) {
     const verb = PATCH_VERBS.find((name) => rest.startsWith(`${name} File: `));
     if (verb)
       changes.push({ verb, path: rest.slice(verb.length + 7).trimEnd() });
-    else if (rest.startsWith("Move to: "))
-      moves.push(rest.slice(9).trimEnd());
+    else if (rest.startsWith("Move to: ")) moves.push(rest.slice(9).trimEnd());
   }
   return { changes, moves };
 }
@@ -800,62 +818,102 @@ function patchCall(input, cwd) {
     }
   };
 }
+function webFetchCall(input) {
+  const url = nonEmptyText(input.url);
+  if (!url || !URL.canParse(url)) return null;
+  const { protocol, host, pathname, search } = new URL(url);
+  const normal = `${protocol}//${host}${pathname}${search}`;
+  const shown = redact(normal);
+  return {
+    tool: "web",
+    operation: shown === normal ? "fetch" : "fetch.redacted",
+    resource: { kind: "url", id: shown },
+    params: { url: shown, url_sha256: fingerprint(url) }
+  };
+}
+function webSearchCall(input) {
+  const query = nonEmptyText(input.query);
+  if (!query) return null;
+  const shown = redact(query);
+  return {
+    tool: "web",
+    operation: shown === query ? "search" : "search.redacted",
+    resource: { kind: "query", id: shown },
+    params: { query: shown, query_sha256: fingerprint(query) }
+  };
+}
+function otherToolCall(name, input) {
+  if (name.startsWith("mcp__")) return mcpCall(name, input);
+  return {
+    tool: "claude-code",
+    // Claude Code's own names, which differ by more than their case.
+    operation: /^[A-Za-z0-9_-]{1,128}$/.test(name) ? name.toLowerCase() : ruleKey(name, 128),
+    resource: { kind: "tool", id: name },
+    params: { input_sha256: fingerprint(input) }
+  };
+}
+var whatIsWritten = (input) => input.content;
+var wholeInput = (input) => input;
+var describers = /* @__PURE__ */ new Map([
+  ["Bash", (input, _cwd, name) => shellCall(name, input)],
+  ["PowerShell", (input, _cwd, name) => shellCall(name, input)],
+  [
+    "Write",
+    (input, cwd) => fileCall(
+      {
+        operation: "file.write",
+        pathField: "file_path",
+        content: whatIsWritten
+      },
+      input,
+      cwd
+    )
+  ],
+  [
+    "Edit",
+    (input, cwd) => fileCall(
+      { operation: "file.edit", pathField: "file_path", content: wholeInput },
+      input,
+      cwd
+    )
+  ],
+  [
+    "MultiEdit",
+    (input, cwd) => fileCall(
+      { operation: "file.edit", pathField: "file_path", content: wholeInput },
+      input,
+      cwd
+    )
+  ],
+  [
+    "Read",
+    (input, cwd) => fileCall(
+      { operation: "file.read", pathField: "file_path", content: wholeInput },
+      input,
+      cwd
+    )
+  ],
+  [
+    "NotebookEdit",
+    (input, cwd) => fileCall(
+      {
+        operation: "notebook.edit",
+        pathField: "notebook_path",
+        content: wholeInput
+      },
+      input,
+      cwd
+    )
+  ],
+  ["Grep", (input, cwd) => searchCall(input, cwd, input.glob)],
+  ["Glob", (input, cwd) => searchCall(input, cwd, input.pattern)],
+  ["apply_patch", (input, cwd) => patchCall(input, cwd)],
+  ["WebFetch", (input) => webFetchCall(input)],
+  ["WebSearch", (input) => webSearchCall(input)]
+]);
 function describeToolCall(name, input, cwd = null) {
-  const described = (() => {
-    switch (name) {
-      case "Bash":
-      case "PowerShell":
-        return shellCall(name, input);
-      case "Write":
-        return fileCall("file.write", "file_path", input, cwd, input.content);
-      case "Edit":
-      case "MultiEdit":
-        return fileCall("file.edit", "file_path", input, cwd, input);
-      case "Read":
-        return fileCall("file.read", "file_path", input, cwd, input);
-      case "Grep":
-        return searchCall(input, cwd, input.glob);
-      case "Glob":
-        return searchCall(input, cwd, input.pattern);
-      case "NotebookEdit":
-        return fileCall("notebook.edit", "notebook_path", input, cwd, input);
-      case "apply_patch":
-        return patchCall(input, cwd);
-      case "WebFetch": {
-        const url = nonEmptyText(input.url);
-        if (!url || !URL.canParse(url)) return null;
-        const { protocol, host, pathname, search } = new URL(url);
-        const normal = `${protocol}//${host}${pathname}${search}`;
-        const shown = redact(normal);
-        return {
-          tool: "web",
-          operation: shown === normal ? "fetch" : "fetch.redacted",
-          resource: { kind: "url", id: shown },
-          params: { url: shown, url_sha256: fingerprint(url) }
-        };
-      }
-      case "WebSearch": {
-        const query = nonEmptyText(input.query);
-        if (!query) return null;
-        const shown = redact(query);
-        return {
-          tool: "web",
-          operation: shown === query ? "search" : "search.redacted",
-          resource: { kind: "query", id: shown },
-          params: { query: shown, query_sha256: fingerprint(query) }
-        };
-      }
-      default:
-        if (name.startsWith("mcp__")) return mcpCall(name, input);
-        return {
-          tool: "claude-code",
-          // Claude Code's own names, which differ by more than their case.
-          operation: /^[A-Za-z0-9_-]{1,128}$/.test(name) ? name.toLowerCase() : ruleKey(name, 128),
-          resource: { kind: "tool", id: name },
-          params: { input_sha256: fingerprint(input) }
-        };
-    }
-  })();
+  const describe = describers.get(name);
+  const described = describe ? describe(input, cwd, name) : otherToolCall(name, input);
   return described && described.resource.id.length <= MAX_RESOURCE ? described : null;
 }
 var allowQuietly = { stdout: "", stderr: "", exitCode: 0 };
@@ -1104,7 +1162,7 @@ async function authorize(client, descriptor, key, options = {}) {
 }
 
 // src/hooks.ts
-var HOOK_VERSION = "0.1.4";
+var HOOK_VERSION = "0.1.5";
 var HOOK_DEADLINE_MS = 345e3;
 function clientFrom(env, deps) {
   const { url, credential } = resolveConnection(env);

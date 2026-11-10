@@ -40,3 +40,10 @@ See [names and descriptions](https://github.com/Nodrail/.github/blob/main/CONTRI
 
 Contributions are made under the [Apache-2.0](LICENSE) licence, as its section 5
 describes. Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md).
+
+## How your change ships
+
+This repository is generated from Nodrail's monorepo, so an accepted pull
+request is applied there with you as co-author and comes back here in the next
+sync, credited to you. Your pull request is then closed with a link to it. See
+[GOVERNANCE.md](GOVERNANCE.md).

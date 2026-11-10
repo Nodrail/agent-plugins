@@ -107,6 +107,13 @@ manifests agree and that the hook blocks when it isn't configured.
 
 Versions are tagged here as `v<version>`, with a GitHub release for each.
 
+Two checks run in CI. One proves the hook is byte for byte the one in
+`@nodrail/client` of the same version on npm. The other, run on demand once
+API keys are configured, runs real Claude Code and Codex sessions with the
+plugins installed, on Linux, macOS and Windows, against a mock Nodrail
+(`scripts/real-agents.mjs`), and checks that an allowed command runs, a denied
+one doesn't, and `.env` stays hidden.
+
 ## Contributing and security
 
 Changes to the hook itself go to
