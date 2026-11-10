@@ -23,12 +23,40 @@ var SECRET_PLACES = [
   ".vault-token",
   "id_rsa",
   "id_ecdsa",
-  "id_ed25519"
+  "id_ed25519",
+  // Agents' and Nodrail's own credentials, and a process's environment.
+  ".credentials.json",
+  ".nodrail",
+  "environ",
+  // Key files, by extension.
+  "*.pem",
+  "*.key",
+  "*.p12",
+  "*.pfx"
 ];
 var secretSet = new Set(SECRET_PLACES);
+var SECRET_PAIRS = [
+  { label: "GitHub CLI tokens", parts: [".config", "gh"] },
+  { label: "Codex sign-in", parts: [".codex", "auth.json"] },
+  // A remote URL in git's config can carry a token.
+  { label: "git config", parts: [".git", "config"] }
+];
+function reachesSecret(params) {
+  if (params.reaches_secrets === true) return true;
+  const parts = Array.isArray(params.path_parts) ? params.path_parts.filter((part) => typeof part === "string") : [];
+  return parts.some(isSecretName) || SECRET_PAIRS.some((pair) => pair.parts.every((part) => parts.includes(part)));
+}
+var KEY_EXTENSIONS = /* @__PURE__ */ new Set(["pem", "key", "p12", "pfx"]);
 function nameForms(part) {
-  const second = part.startsWith(".") ? part.indexOf(".", 1) : -1;
-  return second > 1 ? [part, part.slice(0, second)] : [part];
+  const lower = part.toLowerCase();
+  const forms = /* @__PURE__ */ new Set([part, lower]);
+  const second = lower.startsWith(".") ? lower.indexOf(".", 1) : -1;
+  if (second > 1) forms.add(lower.slice(0, second));
+  if (/^\.env[._-]/.test(lower) || /.\.env$/.test(lower)) forms.add(".env");
+  const extension = lower.slice(lower.lastIndexOf(".") + 1);
+  if (lower.includes(".") && KEY_EXTENSIONS.has(extension))
+    forms.add(`*.${extension}`);
+  return [...forms];
 }
 var isSecretName = (part) => nameForms(part).some((form) => secretSet.has(form));
 var MAX_GLOB = 256;
@@ -101,9 +129,11 @@ function matchesPart(pattern, name) {
   }
   return row[name.length] ?? false;
 }
-var secretExamples = SECRET_PLACES.flatMap(
-  (place) => place.startsWith(".") ? [place, `${place}.local`] : [place]
-);
+var secretExamples = SECRET_PLACES.flatMap((place) => {
+  if (place.startsWith("*.")) return [`server${place.slice(1)}`];
+  if (place === ".env") return [".env", ".env.local", ".env-prod", "prod.env"];
+  return place.startsWith(".") ? [place, `${place}.local`] : [place];
+});
 function globCouldReachSecret(glob) {
   if (glob.length > MAX_GLOB) return true;
   const alternatives = expandBraces(glob);
@@ -112,7 +142,7 @@ function globCouldReachSecret(glob) {
     (alternative) => alternative.split(/[\\/]/).filter(Boolean).some((part) => {
       if (part === "**") return false;
       if (!/[*?[]/.test(part)) return isSecretName(part);
-      const pattern = tokens(part);
+      const pattern = tokens(part.toLowerCase());
       return secretExamples.some((name) => matchesPart(pattern, name));
     })
   );
@@ -134,6 +164,7 @@ var wrappers = new Set(
 );
 var python = /^python[0-9.]*$/;
 var riskyArgument = /^(?:-c|-e|-exec|-execdir|-ok|-okdir|-delete|-fprint.*|-fls|--eval|--expression(?:=.*)?|--(?:exec|output|rsh|to-command|checkpoint-action|use-compress-program|upload-pack|receive-pack|open-files-in-pager|pre|config-env|compress-program|unzip-command|pager)(?:=.*)?)$/;
+var packageManagerFlags = /^--(?:script-shell|shell|config\..+|prefix|dir|userconfig|globalconfig|node-options|call|workspace-root)(?:=.*)?$/;
 var riskyByProgram = new Map(Object.entries({
   // -u is clone's --upload-pack; --config and --template can set a command or
   // install hooks that run on the next git command.
@@ -145,7 +176,11 @@ var riskyByProgram = new Map(Object.entries({
   curl: /^(?:-[oOKTdF].*|--(?:output|remote-name|config|upload-file|data.*|form.*|json)(?:=.*)?)$/,
   wget: /^(?:-[oO].*|--(?:output-document|output-file|post-file)(?:=.*)?)$/,
   dd: /^of=/,
-  make: /^(?:-[fC].*|--(?:file|makefile|directory|eval)(?:=.*)?)$/
+  make: /^(?:-[fC].*|--(?:file|makefile|directory|eval)(?:=.*)?)$/,
+  // Settings that swap the shell scripts run in, or where config comes from.
+  npm: packageManagerFlags,
+  pnpm: packageManagerFlags,
+  yarn: packageManagerFlags
 }));
 var riskySubcommands = new Map(Object.entries({
   git: /^(?:bisect|submodule|filter-branch|difftool|mergetool|config|alias|credential|hook)$/,
@@ -153,7 +188,11 @@ var riskySubcommands = new Map(Object.entries({
   pnpm: /^(?:exec|dlx)$/,
   yarn: /^(?:exec|dlx)$/
 }));
-var namesASecret = (words) => words.slice(1).some((word) => word.split(/[\\/:=]/).some(isSecretName));
+var namesASecret = (words) => words.slice(1).some((word) => word.split(/[:=]/).some(fragmentReachesSecret));
+function fragmentReachesSecret(fragment) {
+  if (fragment.length <= 256) return globCouldReachSecret(fragment);
+  return fragment.split(/[\\/]/).some(isSecretName);
+}
 function runsAnotherCommand(words) {
   if (namesASecret(words)) return true;
   const first = words[0] ?? "";
@@ -455,7 +494,7 @@ var MAX_INLINE_INPUT = 16 * 1024;
 var MAX_COMMAND_ID = MAX_RESOURCE - 42;
 var nonEmptyText = (value) => typeof value === "string" && value ? value : null;
 var REDACTED = "[redacted]";
-var sensitiveWord = /token|secret|passw(?:or)?d|pwd|api[_-]?key|credential|authorization/i;
+var sensitiveWord = /token|secret|passw(?:or)?d|pwd|api[_-]?key|[_-]keys?$|credential|authorization/i;
 var secretValue = `"(?![^"]*[$\`])[^"]*"|'[^']*'|(?![^\\s&;|]*[$\`])[^\\s&;|]+`;
 var secretPatterns = [
   // A whole header value, whatever scheme it uses.
@@ -474,9 +513,12 @@ var secretPatterns = [
     /(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+)/g,
     REDACTED
   ],
-  // sk- is common inside ordinary words (task-…), so it needs no letter or
-  // digit just before it.
-  [/(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}/g, REDACTED]
+  // sk- and sk_ are common inside ordinary words (task-…), so they need no
+  // letter or digit just before them.
+  [/(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}/g, REDACTED],
+  // Stripe, GitLab, Google and npm.
+  [/(?<![A-Za-z0-9])[sr]k_(?:live|test)_[A-Za-z0-9]{10,}/g, REDACTED],
+  [/glpat-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35}|npm_[A-Za-z0-9]{36}/g, REDACTED]
 ];
 var nameChars = /[A-Za-z0-9_-]+/g;
 var assignmentAt = /=|:\s*/y;
@@ -640,6 +682,10 @@ function fileCall(operation, pathField, input, cwd, content) {
     }
   };
 }
+function containsHome(path) {
+  const home = canonicalPath(homedir());
+  return isWithin(home, path);
+}
 function globRoot(pattern) {
   const fixed = [];
   for (const part of pattern.split(/[\\/]/)) {
@@ -664,8 +710,9 @@ function searchCall(input, cwd, filePattern) {
       path,
       path_parts: [.../* @__PURE__ */ new Set([...partsOf(path), ...partsOf(glob ?? "")])],
       ...insideCwd(path, cwd),
-      // A wildcard such as .env* can pick out a secret without naming it.
-      reaches_secrets: glob ? globCouldReachSecret(glob) : false,
+      // A wildcard such as .env* can pick out a secret without naming it, and a
+      // search of the home folder, or above it, reaches every secret there.
+      reaches_secrets: (glob ? globCouldReachSecret(glob) : false) || containsHome(path),
       pattern: redact(nonEmptyText(input.pattern) ?? ""),
       input_sha256: fingerprint(input)
     }
@@ -882,6 +929,10 @@ function waitMsFrom(env) {
   return Number.isFinite(seconds) ? Math.max(0, seconds) * 1e3 : 0;
 }
 
+// src/setup.ts
+var localReadTools = ["Read", "Glob", "Grep"];
+var localReadMatcher = `^(${localReadTools.join("|")})$`;
+
 // src/index.ts
 import { randomBytes } from "node:crypto";
 var Blocked = class extends Error {
@@ -1053,7 +1104,7 @@ async function authorize(client, descriptor, key, options = {}) {
 }
 
 // src/hooks.ts
-var HOOK_VERSION = "0.1.3";
+var HOOK_VERSION = "0.1.4";
 var HOOK_DEADLINE_MS = 345e3;
 function clientFrom(env, deps) {
   const { url, credential } = resolveConnection(env);
@@ -1065,7 +1116,22 @@ function clientFrom(env, deps) {
     fetch: deps.fetch
   });
 }
+var readTools = new Set(localReadTools);
+function checkReadLocally(name, event) {
+  const input = event.tool_input;
+  const action = typeof input === "object" && input !== null ? describeToolCall(name, input, nonEmptyText(event.cwd)) : null;
+  if (!action)
+    return deny("Nodrail: this read could not be described, so it is blocked.");
+  if (reachesSecret(action.params))
+    return deny(
+      "Nodrail: this reads a place where credentials live, so it is blocked."
+    );
+  return { exitCode: 0, stdout: "", stderr: "" };
+}
 async function beforeTool(event, env, deps) {
+  const toolName = nonEmptyText(event.tool_name);
+  if (toolName && readTools.has(toolName))
+    return checkReadLocally(toolName, event);
   const client = clientFrom(env, deps);
   if (!client)
     return deny(
