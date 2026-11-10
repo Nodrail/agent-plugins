@@ -17,25 +17,29 @@ var wrappers = new Set(
    tmux screen busybox sh bash zsh dash fish ksh pwsh powershell cmd awk gawk
    mawk nawk sed node deno bun tsx ts-node npx pnpx bunx perl ruby php lua
    tclsh rscript osascript pypy pypy3 vi vim nvim emacs ssh scp sftp docker
-   podman kubectl`.split(/\s+/)
+   podman kubectl pkexec runuser sg`.split(/\s+/)
 );
 var python = /^python[0-9.]*$/;
-var riskyArgument = /^(?:-c|-e|-exec|-execdir|-ok|-okdir|-delete|-fprint.*|-fls|--eval|--expression(?:=.*)?|--(?:exec|output|rsh|to-command|checkpoint-action|use-compress-program|upload-pack|receive-pack|open-files-in-pager|pre|config-env)(?:=.*)?)$/;
-var riskyByProgram = {
-  git: /^(?:-x|-O.*)$/,
+var riskyArgument = /^(?:-c|-e|-exec|-execdir|-ok|-okdir|-delete|-fprint.*|-fls|--eval|--expression(?:=.*)?|--(?:exec|output|rsh|to-command|checkpoint-action|use-compress-program|upload-pack|receive-pack|open-files-in-pager|pre|config-env|compress-program|unzip-command|pager)(?:=.*)?)$/;
+var riskyByProgram = new Map(Object.entries({
+  // -u is clone's --upload-pack; --config and --template can set a command or
+  // install hooks that run on the next git command.
+  git: /^(?:-x|-O.*|-u.*|--config(?:=.*)?|--template(?:=.*)?)$/,
+  zip: /^(?:-TT.*|--unzip-command(?:=.*)?)$/,
+  man: /^(?:-P.*|--pager(?:=.*)?|-H.*|--html(?:=.*)?)$/,
   tar: /^(?:-I.*|-[a-zA-Z]*I)$/,
   rsync: /^-e.*$/,
   curl: /^(?:-[oOKTdF].*|--(?:output|remote-name|config|upload-file|data.*|form.*|json)(?:=.*)?)$/,
   wget: /^(?:-[oO].*|--(?:output-document|output-file|post-file)(?:=.*)?)$/,
   dd: /^of=/,
   make: /^(?:-[fC].*|--(?:file|makefile|directory|eval)(?:=.*)?)$/
-};
-var riskySubcommands = {
+}));
+var riskySubcommands = new Map(Object.entries({
   git: /^(?:bisect|submodule|filter-branch|difftool|mergetool|config|alias|credential|hook)$/,
   npm: /^(?:exec|x)$/,
   pnpm: /^(?:exec|dlx)$/,
   yarn: /^(?:exec|dlx)$/
-};
+}));
 function runsAnotherCommand(words) {
   const first = words[0] ?? "";
   if (computedProgram.test(first)) return true;
@@ -43,8 +47,8 @@ function runsAnotherCommand(words) {
   if (wrappers.has(program) || python.test(program)) return true;
   const args = words.slice(1);
   if (program === "git" && args[0]?.startsWith("-")) return true;
-  if (riskySubcommands[program]?.test(args[0] ?? "")) return true;
-  const specific = riskyByProgram[program];
+  if (riskySubcommands.get(program)?.test(args[0] ?? "")) return true;
+  const specific = riskyByProgram.get(program);
   return args.some(
     (word) => riskyArgument.test(word) || specific?.test(word) === true
   );
@@ -336,7 +340,7 @@ var MAX_INLINE_INPUT = 16 * 1024;
 var MAX_COMMAND_ID = MAX_RESOURCE - 42;
 var nonEmptyText = (value) => typeof value === "string" && value ? value : null;
 var REDACTED = "[redacted]";
-var sensitiveName = "[A-Za-z0-9_-]*(?:token|secret|passw(?:or)?d|pwd|api[_-]?key|credential|authorization)[A-Za-z0-9_-]*";
+var sensitiveWord = /token|secret|passw(?:or)?d|pwd|api[_-]?key|credential|authorization/i;
 var secretValue = `"(?![^"]*[$\`])[^"]*"|'[^']*'|(?![^\\s&;|]*[$\`])[^\\s&;|]+`;
 var secretPatterns = [
   // A whole header value, whatever scheme it uses.
@@ -345,29 +349,59 @@ var secretPatterns = [
     `$1$2${REDACTED}`
   ],
   [/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, `$1 ${REDACTED}`],
-  // NAME=value and name: value, at any position.
-  [
-    new RegExp(`(${sensitiveName})(=|:\\s*)(${secretValue})`, "gi"),
-    `$1$2${REDACTED}`
-  ],
-  // A value after a space only counts when the name is really a flag, so a path
-  // like ./tokens can't hide the argument that follows it.
-  [
-    new RegExp(`(\\s--?${sensitiveName})(\\s+)(${secretValue})`, "gi"),
-    `$1$2${REDACTED}`
-  ],
   [/([?&](?:key|sig|signature|auth|code)=)[^&\s'"]+/gi, `$1${REDACTED}`],
   [/(\s-u\s+)[^\s:]+:\S+/g, `$1${REDACTED}`],
   [/\b(mysql|mysqldump|mariadb)\b([^|;&\n]*\s-p)[^\s]+/g, `$1$2${REDACTED}`],
   [/(\/\/)[^/\s:@]+:[^/\s@]+@/g, `$1${REDACTED}@`],
+  // Known token shapes, found anywhere: a shell joins 0'ghp_…'_ into one word,
+  // and the token must still be found inside it.
   [
-    /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+)\b/g,
+    /(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+)/g,
     REDACTED
-  ]
+  ],
+  // sk- is common inside ordinary words (task-…), so it needs no letter or
+  // digit just before it.
+  [/(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}/g, REDACTED]
 ];
+var nameChars = /[A-Za-z0-9_-]+/g;
+var assignmentAt = /=|:\s*/y;
+var spaceAt = /\s+/y;
+var valueAt = new RegExp(`(?:${secretValue})`, "y");
+function redactNamedValues(text) {
+  let shown = "";
+  let copied = 0;
+  for (const word of text.matchAll(nameChars)) {
+    const start = word.index;
+    if (start < copied || !sensitiveWord.test(word[0])) continue;
+    let at = start + word[0].length;
+    assignmentAt.lastIndex = at;
+    const assignment2 = assignmentAt.exec(text);
+    if (assignment2) at += assignment2[0].length;
+    else {
+      const isFlag = word[0].startsWith("-") && (start === 0 || /\s/.test(text[start - 1] ?? ""));
+      spaceAt.lastIndex = at;
+      const space = isFlag ? spaceAt.exec(text) : null;
+      if (!space) continue;
+      at += space[0].length;
+    }
+    valueAt.lastIndex = at;
+    const value = valueAt.exec(text);
+    if (!value) continue;
+    shown += text.slice(copied, at) + REDACTED;
+    copied = at + value[0].length;
+  }
+  return shown + text.slice(copied);
+}
+var MAX_REDACTED = MAX_INLINE_INPUT;
+function bounded(value) {
+  if (value.length <= MAX_REDACTED) return value;
+  const head = value.slice(0, MAX_REDACTED);
+  const space = head.search(/\s\S*$/);
+  return `${space > 0 ? head.slice(0, space) : ""} \u2026 [shortened]`;
+}
 var redact = (value) => secretPatterns.reduce(
   (current, [pattern, replacement]) => current.replace(pattern, replacement),
-  value
+  redactNamedValues(bounded(value))
 );
 function redactCommand(line) {
   let shown = "";
@@ -384,7 +418,7 @@ function redactCommand(line) {
   }
   return shown + redact(part);
 }
-var sensitiveKey = new RegExp(`^${sensitiveName}$`, "i");
+var isSensitiveKey = (key) => /^[A-Za-z0-9_-]+$/.test(key) && sensitiveWord.test(key);
 function redactJson(value) {
   if (typeof value === "string") return redact(value);
   if (Array.isArray(value)) return value.map(redactJson);
@@ -392,16 +426,17 @@ function redactJson(value) {
     return Object.fromEntries(
       Object.entries(value).map(([key, item]) => [
         key,
-        sensitiveKey.test(key) ? REDACTED : redactJson(item)
+        isSensitiveKey(key) ? REDACTED : redactJson(item)
       ])
     );
   return value;
 }
 var clip = (value, max) => value.length <= max ? value : `${value.slice(0, max)}\u2026 [shortened]`;
 function commandAction(shape, original, extra) {
-  const shown = redactCommand(shape.text);
-  const hidden = shown !== shape.text;
-  const shortened = shown.length > MAX_COMMAND_ID;
+  const visible = bounded(shape.text);
+  const shown = redactCommand(visible);
+  const hidden = shown !== visible;
+  const shortened = shape.text.length > MAX_COMMAND_ID;
   let operation = shape.operation;
   if (hidden) operation = "command.redacted";
   else if (shortened) operation = "command.compound";
@@ -469,9 +504,21 @@ function fileCall(operation, pathField, input, cwd, content) {
     }
   };
 }
-function searchCall(input, cwd) {
+function globRoot(pattern) {
+  const fixed = [];
+  for (const part of pattern.split(/[\\/]/)) {
+    if (/[*?[\]{}]/.test(part)) break;
+    fixed.push(part);
+  }
+  return fixed.join("/");
+}
+function searchCall(input, cwd, filePattern) {
   const within = nonEmptyText(input.path) ?? cwd;
-  const path = within ? fullPath(within, cwd) : null;
+  const base = within ? fullPath(within, cwd) : null;
+  if (!base) return null;
+  const glob = nonEmptyText(filePattern);
+  const root = glob ? globRoot(glob) : "";
+  const path = root ? fullPath(root, base) : base;
   if (!path) return null;
   return {
     tool: "files",
@@ -479,7 +526,7 @@ function searchCall(input, cwd) {
     resource: { kind: "file", id: path },
     params: {
       path,
-      path_parts: partsOf(path),
+      path_parts: [.../* @__PURE__ */ new Set([...partsOf(path), ...partsOf(glob ?? "")])],
       pattern: redact(nonEmptyText(input.pattern) ?? ""),
       input_sha256: fingerprint(input)
     }
@@ -574,8 +621,9 @@ function describeToolCall(name, input, cwd = null) {
       case "Read":
         return fileCall("file.read", "file_path", input, cwd, input);
       case "Grep":
+        return searchCall(input, cwd, input.glob);
       case "Glob":
-        return searchCall(input, cwd);
+        return searchCall(input, cwd, input.pattern);
       case "NotebookEdit":
         return fileCall("notebook.edit", "notebook_path", input, cwd, input);
       case "apply_patch":
@@ -648,6 +696,8 @@ function blockedText(decision) {
       return `Nodrail: the request was closed because something changed.${reference} Try again to ask for a new decision.`;
     case "NOT_CONFIGURED":
       return "Nodrail: not configured, so this action is blocked. Set NODRAIL_CREDENTIAL or save it to ~/.nodrail/credential.";
+    case "INSECURE_URL":
+      return "Nodrail: its address must use https (plain http only for this machine), so the credential isn't sent and this action is blocked.";
     case "UNAUTHENTICATED":
       return "Nodrail: the credential was refused, so this action is blocked.";
     case "QUOTA_EXCEEDED":
@@ -713,18 +763,33 @@ function asStatus(body) {
     throw new Blocked("INVALID_RESPONSE");
   return body;
 }
+function isSafeUrl(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol === "https:") return true;
+  if (parsed.protocol !== "http:") return false;
+  const host = parsed.hostname.replace(/^\[|\]$/g, "");
+  return host === "localhost" || host.endsWith(".localhost") || host === "::1" || /^127(?:\.\d{1,3}){3}$/.test(host);
+}
 var NodrailClient = class {
   constructor(options) {
     this.options = options;
     this.base = `${options.url.replace(/\/$/, "")}/api/v1/runtime`;
     this.timeoutMs = options.timeoutMs ?? 1e4;
     this.send = options.fetch ?? fetch;
+    this.secure = isSafeUrl(options.url);
   }
   options;
   base;
   timeoutMs;
   send;
+  secure;
   async request(path, init = {}) {
+    if (!this.secure) throw new Blocked("INSECURE_URL");
     let response;
     try {
       response = await this.send(`${this.base}${path}`, {
@@ -842,7 +907,7 @@ async function authorize(client, descriptor, key, options = {}) {
 }
 
 // src/hooks.ts
-var HOOK_VERSION = "0.1.1";
+var HOOK_VERSION = "0.1.2";
 var HOOK_DEADLINE_MS = 345e3;
 function clientFrom(env, deps) {
   const { url, credential } = resolveConnection(env);

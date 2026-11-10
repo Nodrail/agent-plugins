@@ -26,6 +26,15 @@ known limits, such as Codex running a tool when the hook can't start at all.
 Those aren't vulnerabilities, but we'd still like to hear about ways to close
 them.
 
+## How the hook is protected
+
+The hook in `plugins/*/hooks/` is built from
+[@nodrail/client](https://github.com/Nodrail/nodrail-js/tree/main/packages/client).
+Each plugin version equals the `@nodrail/client` version it ships, and CI
+checks that the file is byte for byte the one in that version on npm, which
+carries provenance from GitHub Actions. See [GOVERNANCE.md](GOVERNANCE.md) for
+how changes and releases are reviewed.
+
 ## Supported versions
 
 Fixes go to the latest version. Update with `/plugin update` in Claude Code, or

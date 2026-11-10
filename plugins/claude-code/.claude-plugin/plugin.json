@@ -1,6 +1,6 @@
 {
   "name": "nodrail",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Checks every action Claude Code takes against your team's rules in Nodrail.",
   "author": {
     "name": "Nodrail",

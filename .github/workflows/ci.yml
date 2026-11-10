@@ -25,6 +25,8 @@ jobs:
           node-version: 22
       - name: Manifests agree and the hook blocks when unconfigured
         run: node scripts/check.mjs
+      - name: The hook is the one published in @nodrail/client
+        run: node scripts/verify-hook.mjs
       - name: Claude Code accepts the marketplace and the plugin
         run: |
           npx --yes @anthropic-ai/claude-code@2.1.322 plugin validate --strict .
