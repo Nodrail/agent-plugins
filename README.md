@@ -1,8 +1,9 @@
 # Nodrail plugins for Claude Code and Codex
 
-Every action the agent attempts is checked against your team's rules before it
-runs. Anything no rule covers is blocked and a person is asked. An allow never
-widens what the agent itself permits.
+Every action that can change something (shell commands, file changes, MCP
+tools) is checked against your team's rules before it runs. Anything no rule
+covers waits for a person in Nodrail, under **Approvals**. An allow never widens
+what the agent itself permits.
 
 [![Check plugins](https://github.com/Nodrail/agent-plugins/actions/workflows/ci.yml/badge.svg)](https://github.com/Nodrail/agent-plugins/actions/workflows/ci.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/Nodrail/agent-plugins/badge)](https://scorecard.dev/viewer/?uri=github.com/Nodrail/agent-plugins)
@@ -10,6 +11,10 @@ widens what the agent itself permits.
 
 Start in Nodrail: **Agents → Connect an agent**, and copy the credential. It is
 shown once.
+
+Both plugins run their hook with Node.js 22 or later, which must be on your
+`PATH`. On Windows the hook passes its tests, but hasn't been tried in the real
+agents yet.
 
 ## Claude Code
 
@@ -21,7 +26,8 @@ Needs Claude Code 2.1.295 or later.
 ```
 
 Claude Code asks for the credential and keeps it in your system's secure store.
-That's all. To change it later: `/plugin configure nodrail@nodrail`.
+That's all. To change it later: `/plugin configure nodrail@nodrail`. A
+`NODRAIL_CREDENTIAL` set in your shell takes precedence over the saved one.
 
 Self-hosting? Set the address in the same prompt.
 
@@ -33,8 +39,9 @@ Needs Codex 0.155 or later.
 codex plugin marketplace add Nodrail/agent-plugins
 codex plugin add nodrail@nodrail
 
-# Save the credential once, for every session on this machine:
-mkdir -p ~/.nodrail && (umask 077; printf '%s' '<the credential>' > ~/.nodrail/credential)
+# Save the credential once, for every session on this machine.
+# Paste it, press Enter, then Ctrl-D. It stays out of your shell history.
+mkdir -p ~/.nodrail && (umask 077; cat > ~/.nodrail/credential)
 ```
 
 Start Codex and approve the Nodrail hooks in `/hooks`. Codex doesn't run new
@@ -54,8 +61,9 @@ Self-hosting? Also set `NODRAIL_URL`.
 | New tools        | Yes, by default                  | No: governed tools are listed by name |
 | Read-only tools  | No                               | No                                    |
 
-A patch that touches several files, or renames one, is its own operation
-(`files.file.patch`), so a rule for one folder can't let a second file through.
+A patch that touches several files, or renames one, is its own operation (tool
+`files`, operation `file.patch`), so a rule for one folder can't let a second
+file through.
 
 ## When something goes wrong
 
@@ -76,6 +84,18 @@ around the hook. This is a control for agents, not a sandbox.
 File contents never do, only a fingerprint and the path. Commands, URLs and MCP
 inputs are sent so a person can review them, with anything that looks like a
 secret removed. That filter is best effort.
+
+## Waiting for a person
+
+A call no rule covers waits up to 5 minutes for someone to allow or deny it in
+Nodrail, then counts as blocked; the agent is told why and can try again. Set
+`NODRAIL_WAIT_SECONDS` to change the wait (`0` blocks at once).
+
+## Turning it off
+
+- **Claude Code:** `/plugin disable nodrail@nodrail`, or `/plugin uninstall nodrail@nodrail`.
+- **Codex:** `codex plugin remove nodrail@nodrail`. Delete `~/.nodrail/credential`
+  if no other agent uses it.
 
 ## How it's built
 
