@@ -9,7 +9,10 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const { version } = JSON.parse(
-  readFileSync(join(root, "plugins/claude-code/.claude-plugin/plugin.json"), "utf8"),
+  readFileSync(
+    join(root, "plugins/claude-code/.claude-plugin/plugin.json"),
+    "utf8",
+  ),
 );
 const spec = `@nodrail/client@${version}`;
 const folder = mkdtempSync(join(tmpdir(), "nodrail-hook-"));

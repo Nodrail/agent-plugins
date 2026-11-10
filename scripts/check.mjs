@@ -16,10 +16,16 @@ const codex = json("plugins/codex/.codex-plugin/plugin.json");
 const claudeMarket = json(".claude-plugin/marketplace.json");
 const codexMarket = json(".agents/plugins/marketplace.json");
 
-expect(claude.version === codex.version, "the two plugins have different versions");
+expect(
+  claude.version === codex.version,
+  "the two plugins have different versions",
+);
 // The hook comes from @nodrail/client, and the plugins carry its version.
 const hookVersion = /HOOK_VERSION = "([^"]+)"/.exec(
-  readFileSync(resolve(root, "plugins/claude-code/hooks/nodrail-hook.mjs"), "utf8"),
+  readFileSync(
+    resolve(root, "plugins/claude-code/hooks/nodrail-hook.mjs"),
+    "utf8",
+  ),
 )?.[1];
 expect(
   hookVersion === claude.version,
@@ -27,13 +33,15 @@ expect(
 );
 expect(
   claudeMarket.plugins.some(
-    (entry) => entry.name === claude.name && entry.source === "./plugins/claude-code",
+    (entry) =>
+      entry.name === claude.name && entry.source === "./plugins/claude-code",
   ),
   "the Claude Code marketplace doesn't list the plugin",
 );
 expect(
   codexMarket.plugins.some(
-    (entry) => entry.name === codex.name && entry.source?.path === "./plugins/codex",
+    (entry) =>
+      entry.name === codex.name && entry.source?.path === "./plugins/codex",
   ),
   "the Codex marketplace doesn't list the plugin",
 );
@@ -41,13 +49,21 @@ expect(
   claude.userConfig?.credential?.sensitive === true,
   "the Claude Code credential isn't kept in the secure store",
 );
-expect(codex.hooks === "./hooks/hooks.json", "the Codex plugin doesn't point at its hooks");
+expect(
+  codex.hooks === "./hooks/hooks.json",
+  "the Codex plugin doesn't point at its hooks",
+);
 
 const hooks = {
-  "claude-code": readFileSync(resolve(root, "plugins/claude-code/hooks/nodrail-hook.mjs")),
+  "claude-code": readFileSync(
+    resolve(root, "plugins/claude-code/hooks/nodrail-hook.mjs"),
+  ),
   codex: readFileSync(resolve(root, "plugins/codex/hooks/nodrail-hook.mjs")),
 };
-expect(hooks["claude-code"].equals(hooks.codex), "the two plugins ship different hooks");
+expect(
+  hooks["claude-code"].equals(hooks.codex),
+  "the two plugins ship different hooks",
+);
 
 for (const name of Object.keys(hooks)) {
   const declared = JSON.stringify(json(`plugins/${name}/hooks/hooks.json`));
@@ -59,7 +75,9 @@ for (const name of Object.keys(hooks)) {
     expect(declared.includes(`"${event}"`), `${name}: no ${event} hook`);
 }
 expect(
-  JSON.stringify(json("plugins/claude-code/hooks/hooks.json")).includes('"onFailure":"block"'),
+  JSON.stringify(json("plugins/claude-code/hooks/hooks.json")).includes(
+    '"onFailure":"block"',
+  ),
   "Claude Code doesn't block when the hook itself fails",
 );
 
@@ -79,7 +97,8 @@ for (const agent of [[], ["codex"]]) {
     timeout: 20_000,
   });
   expect(
-    result.status === 0 && result.stdout.includes('"permissionDecision":"deny"'),
+    result.status === 0 &&
+      result.stdout.includes('"permissionDecision":"deny"'),
     `the ${agent[0] ?? "claude-code"} hook didn't block without a credential: ${result.stdout}${result.stderr}`,
   );
 }
@@ -87,7 +106,9 @@ for (const agent of [[], ["codex"]]) {
 if (!existsSync(resolve(root, "README.md"))) problems.push("README.md missing");
 
 if (problems.length) {
-  console.error(`Plugin check failed:\n${problems.map((p) => `- ${p}`).join("\n")}`);
+  console.error(
+    `Plugin check failed:\n${problems.map((p) => `- ${p}`).join("\n")}`,
+  );
   process.exit(1);
 }
 console.log("Plugin check passed.");

@@ -1,0 +1,78 @@
+# Real Claude Code and Codex sessions with the plugins as shipped, on Linux,
+# macOS and Windows, against a mock Nodrail. They check what actually happens:
+# an allowed command runs, a denied one doesn't, and .env stays hidden.
+# Spends a little on model tokens, so it only runs on demand, once API keys are
+# in the agents environment. Without them each session skips straight away.
+name: Real agents
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: real-agents-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  session:
+    name: ${{ matrix.agent }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    # The API keys live only in this environment, which only main can use.
+    environment: agents
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        agent: [claude-code, codex]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Before anything is installed, so a run without keys costs nothing.
+      - name: Check for an API key
+        id: key
+        env:
+          AGENT: ${{ matrix.agent }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ "$AGENT" = claude-code ]; then key="$ANTHROPIC_API_KEY"; else key="$OPENAI_API_KEY"; fi
+          if [ -z "$key" ]; then
+            echo "::notice::No API key for $AGENT in the agents environment, so this session is skipped."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.key.outputs.present == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - if: steps.key.outputs.present == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      # Exact versions: the agents this checks against, and the client whose
+      # hook the plugins ship.
+      - name: Install the agent and the client the plugins ship
+        if: steps.key.outputs.present == 'true'
+        env:
+          AGENT: ${{ matrix.agent }}
+        run: | # zizmor: ignore[adhoc-packages]
+          version=$(node -p 'require("./plugins/claude-code/.claude-plugin/plugin.json").version')
+          if [ "$AGENT" = claude-code ]; then
+            npm install --global @anthropic-ai/claude-code@2.1.322 # zizmor: ignore[adhoc-packages]
+          else
+            npm install --global @openai/codex@0.155.1 # zizmor: ignore[adhoc-packages]
+          fi
+          npm install --prefix "$RUNNER_TEMP/client" --no-audit --no-fund "@nodrail/client@$version" # zizmor: ignore[adhoc-packages]
+      - name: Run a real session
+        if: steps.key.outputs.present == 'true'
+        env:
+          AGENT: ${{ matrix.agent }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          NODRAIL_CLIENT_DIR="$RUNNER_TEMP/client/node_modules/@nodrail/client" node scripts/real-agents.mjs "$AGENT"
