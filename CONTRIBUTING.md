@@ -16,7 +16,8 @@ Needs Node 22 or later.
 
 ```sh
 node scripts/check.mjs
-npx @anthropic-ai/claude-code plugin validate --strict .
+npx @anthropic-ai/claude-code@2.1.322 plugin validate --strict .
+npx @anthropic-ai/claude-code@2.1.322 plugin validate --strict plugins/claude-code
 ```
 
 To try your copy, add this folder as a marketplace instead of
