@@ -17,6 +17,14 @@ const claudeMarket = json(".claude-plugin/marketplace.json");
 const codexMarket = json(".agents/plugins/marketplace.json");
 
 expect(claude.version === codex.version, "the two plugins have different versions");
+// The hook comes from @nodrail/client, and the plugins carry its version.
+const hookVersion = /HOOK_VERSION = "([^"]+)"/.exec(
+  readFileSync(resolve(root, "plugins/claude-code/hooks/nodrail-hook.mjs"), "utf8"),
+)?.[1];
+expect(
+  hookVersion === claude.version,
+  `the plugins say ${claude.version}, but their hook is ${hookVersion ?? "unversioned"}`,
+);
 expect(
   claudeMarket.plugins.some(
     (entry) => entry.name === claude.name && entry.source === "./plugins/claude-code",
