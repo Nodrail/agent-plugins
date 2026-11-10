@@ -1,0 +1,12 @@
+{
+  "name": "nodrail",
+  "owner": { "name": "Nodrail", "email": "hello@nodrail.com" },
+  "description": "Nodrail plugins: your team's rules for every action an agent takes.",
+  "plugins": [
+    {
+      "name": "nodrail",
+      "source": "./plugins/claude-code",
+      "description": "Checks every action Claude Code takes against your team's rules in Nodrail."
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/nodrail-hook.mjs"
+            ]
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^(?!(Read|Glob|Grep|LS|TodoWrite|TodoRead|AskUserQuestion|Agent|Task|ToolSearch|ExitPlanMode|EnterPlanMode)$).*$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/nodrail-hook.mjs"
+            ],
+            "timeout": 360,
+            "onFailure": "block"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^(?!(Read|Glob|Grep|LS|TodoWrite|TodoRead|AskUserQuestion|Agent|Task|ToolSearch|ExitPlanMode|EnterPlanMode)$).*$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/nodrail-hook.mjs"
+            ]
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "^(?!(Read|Glob|Grep|LS|TodoWrite|TodoRead|AskUserQuestion|Agent|Task|ToolSearch|ExitPlanMode|EnterPlanMode)$).*$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/nodrail-hook.mjs"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "nodrail",
+  "version": "0.1.0",
+  "description": "Checks every action Claude Code takes against your team's rules in Nodrail.",
+  "author": { "name": "Nodrail", "email": "hello@nodrail.com" },
+  "homepage": "https://nodrail.com",
+  "license": "Apache-2.0",
+  "userConfig": {
+    "credential": {
+      "type": "string",
+      "title": "Agent credential",
+      "description": "From Nodrail: Agents, then Connect an agent. It is shown once.",
+      "sensitive": true,
+      "required": true
+    },
+    "url": {
+      "type": "string",
+      "title": "Nodrail address",
+      "description": "Leave as it is unless your team runs its own Nodrail.",
+      "default": "https://app.nodrail.com"
+    }
+  }
+}

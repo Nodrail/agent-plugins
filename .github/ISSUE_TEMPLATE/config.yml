@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a vulnerability
+    url: https://github.com/Nodrail/agent-plugins/security/advisories/new
+    about: Privately, so it can be fixed before anyone else knows.
+  - name: A problem with the hook's decisions or the SDK
+    url: https://github.com/Nodrail/nodrail-js/issues/new/choose
+    about: The hook's code lives in Nodrail/nodrail-js.
+  - name: Questions about Nodrail Cloud or your account
+    url: mailto:hello@nodrail.com
+    about: Billing, workspaces and anything that isn't about this code.

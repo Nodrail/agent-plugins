@@ -1,0 +1,35 @@
+name: Installing or running a plugin
+description: The plugin doesn't install, doesn't start, or a tool isn't checked
+labels: ["type: bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Security problems don't belong here.** If an action that should be blocked can run, report it privately: see [SECURITY.md](../blob/main/SECURITY.md).
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Agent
+      options: ["Claude Code", "Codex"]
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Agent and plugin versions
+      placeholder: "Claude Code 2.1.322, plugin 0.1.0, macOS"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: What you did
+      description: Commands and output. Remove the credential first.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: What you expected, and what happened
+    validations:
+      required: true
