@@ -1,6 +1,7 @@
 name: Release
 
-# When the plugin version changes on main, tag it and write its release.
+# When the plugin version changes on main, tag it and write its release. The
+# plugins carry the version of @nodrail/client, whose hook they ship.
 on:
   push:
     branches: [main]
@@ -30,5 +31,7 @@ jobs:
           if gh release view "v$version" >/dev/null 2>&1; then
             echo "v$version is already released."
           else
-            gh release create "v$version" --target "$GITHUB_SHA" --title "v$version" --generate-notes
+            gh release create "v$version" --target "$GITHUB_SHA" --title "v$version" \
+              --notes "Ships the hook from [@nodrail/client $version](https://www.npmjs.com/package/@nodrail/client/v/$version)." \
+              --generate-notes
           fi

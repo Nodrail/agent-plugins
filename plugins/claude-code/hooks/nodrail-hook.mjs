@@ -842,7 +842,7 @@ async function authorize(client, descriptor, key, options = {}) {
 }
 
 // src/hooks.ts
-var HOOK_VERSION = "0.1.0";
+var HOOK_VERSION = "0.1.1";
 var HOOK_DEADLINE_MS = 345e3;
 function clientFrom(env, deps) {
   const { url, credential } = resolveConnection(env);

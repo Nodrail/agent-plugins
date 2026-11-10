@@ -1,15 +1,20 @@
 {
   "name": "nodrail",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Checks every action Codex takes against your team's rules in Nodrail.",
   "homepage": "https://nodrail.com",
   "license": "Apache-2.0",
-  "author": { "name": "Nodrail", "email": "hello@nodrail.com" },
+  "author": {
+    "name": "Nodrail",
+    "email": "hello@nodrail.com"
+  },
   "hooks": "./hooks/hooks.json",
   "interface": {
     "displayName": "Nodrail",
     "shortDescription": "Your team's rules for every Codex action",
     "category": "Productivity",
-    "capabilities": ["Hooks"]
+    "capabilities": [
+      "Hooks"
+    ]
   }
 }
