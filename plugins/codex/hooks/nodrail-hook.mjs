@@ -3,7 +3,120 @@
 // ../policy-engine/src/actions.ts
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+
+// ../policy-engine/src/secrets.ts
+var SECRET_PLACES = [
+  ".env",
+  ".envrc",
+  ".ssh",
+  ".aws",
+  ".gnupg",
+  ".kube",
+  ".docker",
+  "gcloud",
+  ".netrc",
+  ".npmrc",
+  ".pypirc",
+  ".git-credentials",
+  ".pgpass",
+  ".vault-token",
+  "id_rsa",
+  "id_ecdsa",
+  "id_ed25519"
+];
+var secretSet = new Set(SECRET_PLACES);
+function nameForms(part) {
+  const second = part.startsWith(".") ? part.indexOf(".", 1) : -1;
+  return second > 1 ? [part, part.slice(0, second)] : [part];
+}
+var isSecretName = (part) => nameForms(part).some((form) => secretSet.has(form));
+var MAX_GLOB = 256;
+var MAX_ALTERNATIVES = 64;
+function expandBraces(pattern) {
+  const open = pattern.indexOf("{");
+  if (open < 0) return [pattern];
+  const close = pattern.indexOf("}", open);
+  if (close < 0) return [pattern];
+  const inner = pattern.slice(open + 1, close);
+  if (inner.includes("{")) return null;
+  const results = [];
+  for (const choice of inner.split(",")) {
+    const rest = expandBraces(
+      pattern.slice(0, open) + choice + pattern.slice(close + 1)
+    );
+    if (!rest) return null;
+    results.push(...rest);
+    if (results.length > MAX_ALTERNATIVES) return null;
+  }
+  return results;
+}
+function tokens(pattern) {
+  const result = [];
+  for (let at = 0; at < pattern.length; at += 1) {
+    const char = pattern[at] ?? "";
+    if (char === "*") {
+      if (!("any" in (result.at(-1) ?? {}))) result.push({ any: true });
+    } else if (char === "?") result.push({ one: true });
+    else if (char === "[") {
+      const end = pattern.indexOf("]", at + 2);
+      if (end < 0) result.push({ char });
+      else {
+        const body = pattern.slice(at + 1, end);
+        const negate = body.startsWith("!") || body.startsWith("^");
+        result.push({ set: negate ? body.slice(1) : body, negate });
+        at = end;
+      }
+    } else result.push({ char });
+  }
+  return result;
+}
+function inSet(set, char) {
+  for (let at = 0; at < set.length; at += 1) {
+    const low = set[at] ?? "";
+    if (set[at + 1] === "-" && at + 2 < set.length) {
+      const high = set[at + 2] ?? "";
+      if (char >= low && char <= high) return true;
+      at += 2;
+    } else if (char === low) return true;
+  }
+  return false;
+}
+function matchesPart(pattern, name) {
+  let row = Array.from({ length: name.length + 1 }, () => false);
+  row[0] = true;
+  for (const token of pattern) {
+    const next = Array.from({ length: name.length + 1 }, () => false);
+    if ("any" in token) {
+      next[0] = row[0] ?? false;
+      for (let at = 1; at <= name.length; at += 1)
+        next[at] = (row[at] ?? false) || (next[at - 1] ?? false);
+    } else
+      for (let at = 1; at <= name.length; at += 1) {
+        const char = name[at - 1] ?? "";
+        const fits = "one" in token || "set" in token && inSet(token.set, char) !== token.negate || "char" in token && token.char === char;
+        next[at] = fits && (row[at - 1] ?? false);
+      }
+    row = next;
+  }
+  return row[name.length] ?? false;
+}
+var secretExamples = SECRET_PLACES.flatMap(
+  (place) => place.startsWith(".") ? [place, `${place}.local`] : [place]
+);
+function globCouldReachSecret(glob) {
+  if (glob.length > MAX_GLOB) return true;
+  const alternatives = expandBraces(glob);
+  if (!alternatives) return true;
+  return alternatives.some(
+    (alternative) => alternative.split(/[\\/]/).filter(Boolean).some((part) => {
+      if (part === "**") return false;
+      if (!/[*?[]/.test(part)) return isSecretName(part);
+      const pattern = tokens(part);
+      return secretExamples.some((name) => matchesPart(pattern, name));
+    })
+  );
+}
 
 // ../policy-engine/src/commands.ts
 var shellSyntax = /[;&|`$<>(){}\n\r\\]/;
@@ -40,7 +153,9 @@ var riskySubcommands = new Map(Object.entries({
   pnpm: /^(?:exec|dlx)$/,
   yarn: /^(?:exec|dlx)$/
 }));
+var namesASecret = (words) => words.slice(1).some((word) => word.split(/[\\/:=]/).some(isSecretName));
 function runsAnotherCommand(words) {
+  if (namesASecret(words)) return true;
   const first = words[0] ?? "";
   if (computedProgram.test(first)) return true;
   const program = (first.split("/").pop() ?? "").toLowerCase();
@@ -472,21 +587,41 @@ function canonicalPath(path) {
   let existing = path;
   for (; ; ) {
     try {
-      return join(realpathSync.native(existing), ...missing);
+      return join(realpathSync.native(existing), ...missing.reverse());
     } catch {
       const parent = dirname(existing);
       if (parent === existing) return path;
-      missing.unshift(basename(existing));
+      missing.push(basename(existing));
       existing = parent;
     }
   }
 }
-var partsOf = (path) => path.split(/[\\/]/).filter(Boolean);
+var partsOf = (path) => [
+  ...new Set(path.split(/[\\/]/).filter(Boolean).flatMap(nameForms))
+];
+var MAX_PATH = 4096;
+var MAX_DEPTH = 256;
 function fullPath(raw, cwd) {
+  if (raw.length > MAX_PATH) return null;
   const expanded = /^~(?=$|\/)/.test(raw) ? `${homedir()}${raw.slice(1)}` : raw;
   if (!isAbsolute(expanded) && !cwd) return null;
-  return canonicalPath(resolve(cwd ?? "/", expanded));
+  const absolute = resolve(cwd ?? "/", expanded);
+  if (absolute.split(/[\\/]/).length > MAX_DEPTH) return null;
+  return canonicalPath(absolute);
 }
+function insideCwd(path, cwd) {
+  const root = cwd ? fullPath(cwd, null) : null;
+  return root ? { inside_cwd: isWithin(path, root) } : {};
+}
+function isWithin(path, root) {
+  const prefix = root.endsWith(sep) ? root : `${root}${sep}`;
+  return path === root || path.startsWith(prefix);
+}
+function insideAll(paths, cwd) {
+  const root = cwd ? fullPath(cwd, null) : null;
+  return root ? { inside_cwd: paths.every((path) => isWithin(path, root)) } : {};
+}
+var MAX_PATCH_FILES = 1e3;
 function fileCall(operation, pathField, input, cwd, content) {
   const raw = nonEmptyText(input[pathField]);
   if (!raw) return null;
@@ -500,6 +635,7 @@ function fileCall(operation, pathField, input, cwd, content) {
     params: {
       path,
       path_parts: partsOf(path),
+      ...insideCwd(path, cwd),
       content_sha256: fingerprint(content)
     }
   };
@@ -527,6 +663,9 @@ function searchCall(input, cwd, filePattern) {
     params: {
       path,
       path_parts: [.../* @__PURE__ */ new Set([...partsOf(path), ...partsOf(glob ?? "")])],
+      ...insideCwd(path, cwd),
+      // A wildcard such as .env* can pick out a secret without naming it.
+      reaches_secrets: glob ? globCouldReachSecret(glob) : false,
       pattern: redact(nonEmptyText(input.pattern) ?? ""),
       input_sha256: fingerprint(input)
     }
@@ -581,6 +720,7 @@ function patchCall(input, cwd) {
   const patch = nonEmptyText(input.command) ?? nonEmptyText(input.patch);
   if (!patch) return null;
   const { changes, moves } = patchHeaders(patch);
+  if (changes.length + moves.length > MAX_PATCH_FILES) return null;
   const paths = [...changes.map((change) => change.path), ...moves].map(
     (raw) => raw ? fullPath(raw, cwd) : null
   );
@@ -594,7 +734,12 @@ function patchCall(input, cwd) {
       tool: "files",
       operation,
       resource: { kind: "file", id: only },
-      params: { path: only, path_parts: partsOf(only), content_sha256 }
+      params: {
+        path: only,
+        path_parts: partsOf(only),
+        ...insideCwd(only, cwd),
+        content_sha256
+      }
     };
   return {
     tool: "files",
@@ -603,6 +748,7 @@ function patchCall(input, cwd) {
     params: {
       paths: known,
       path_parts: [...new Set(known.flatMap(partsOf))],
+      ...insideAll(known, cwd),
       content_sha256
     }
   };
@@ -907,7 +1053,7 @@ async function authorize(client, descriptor, key, options = {}) {
 }
 
 // src/hooks.ts
-var HOOK_VERSION = "0.1.2";
+var HOOK_VERSION = "0.1.3";
 var HOOK_DEADLINE_MS = 345e3;
 function clientFrom(env, deps) {
   const { url, credential } = resolveConnection(env);
