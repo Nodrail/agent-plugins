@@ -74,11 +74,17 @@ for (const name of Object.keys(hooks)) {
   for (const event of ["SessionStart", "PreToolUse", "PostToolUse"])
     expect(declared.includes(`"${event}"`), `${name}: no ${event} hook`);
 }
+const claudeHooks = json("plugins/claude-code/hooks/hooks.json").hooks;
 expect(
-  JSON.stringify(json("plugins/claude-code/hooks/hooks.json")).includes(
-    '"onFailure":"block"',
-  ),
+  JSON.stringify(claudeHooks).includes('"onFailure":"block"'),
   "Claude Code doesn't block when the hook itself fails",
+);
+// Subagents are the steps of a run, and starting one is a governed call.
+for (const event of ["SubagentStart", "SubagentStop"])
+  expect(claudeHooks[event], `claude-code: no ${event} hook`);
+expect(
+  new RegExp(claudeHooks.PreToolUse[0].matcher).test("Agent"),
+  "claude-code: starting a subagent isn't governed",
 );
 
 // With no credential, every governed call must be blocked, for either agent.
