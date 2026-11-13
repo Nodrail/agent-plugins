@@ -1,7 +1,7 @@
 {
   "name": "nodrail",
-  "version": "0.1.5",
-  "description": "Checks every action Codex takes against your team's rules in Nodrail.",
+  "version": "0.2.0",
+  "description": "Check supported Codex tool calls against workspace policies with the Nodrail Cloud plugin.",
   "homepage": "https://nodrail.com",
   "license": "Apache-2.0",
   "author": {
@@ -11,7 +11,7 @@
   "hooks": "./hooks/hooks.json",
   "interface": {
     "displayName": "Nodrail",
-    "shortDescription": "Your team's rules for every Codex action",
+    "shortDescription": "Cloud permissions for supported Codex tools",
     "category": "Productivity",
     "capabilities": [
       "Hooks"

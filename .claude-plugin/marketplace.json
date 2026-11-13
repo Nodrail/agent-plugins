@@ -1,12 +1,12 @@
 {
   "name": "nodrail",
   "owner": { "name": "Nodrail", "email": "hello@nodrail.com" },
-  "description": "Nodrail plugins: your team's rules for every action an agent takes.",
+  "description": "Cloud-connected permission checks for supported agent tools.",
   "plugins": [
     {
       "name": "nodrail",
       "source": "./plugins/claude-code",
-      "description": "Checks every action Claude Code takes against your team's rules in Nodrail."
+      "description": "Check covered Claude Code tool calls against workspace policies and request human review in Nodrail Cloud."
     }
   ]
 }

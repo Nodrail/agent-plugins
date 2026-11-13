@@ -15,7 +15,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "^(?!(Read|Glob|Grep|LS|TodoWrite|TodoRead|AskUserQuestion|Agent|Task|ToolSearch|ExitPlanMode|EnterPlanMode)$).*$",
+        "matcher": "^(?!(Read|Glob|Grep|LS|TodoWrite|TodoRead|AskUserQuestion|ToolSearch|ExitPlanMode|EnterPlanMode)$).*$",
         "hooks": [
           {
             "type": "command",
@@ -45,7 +45,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "^(?!(Read|Glob|Grep|LS|TodoWrite|TodoRead|AskUserQuestion|Agent|Task|ToolSearch|ExitPlanMode|EnterPlanMode)$).*$",
+        "matcher": "^(?!(Read|Glob|Grep|LS|TodoWrite|TodoRead|AskUserQuestion|ToolSearch|ExitPlanMode|EnterPlanMode)$).*$",
         "hooks": [
           {
             "type": "command",
@@ -59,7 +59,7 @@
     ],
     "PostToolUseFailure": [
       {
-        "matcher": "^(?!(Read|Glob|Grep|LS|TodoWrite|TodoRead|AskUserQuestion|Agent|Task|ToolSearch|ExitPlanMode|EnterPlanMode)$).*$",
+        "matcher": "^(?!(Read|Glob|Grep|LS|TodoWrite|TodoRead|AskUserQuestion|ToolSearch|ExitPlanMode|EnterPlanMode)$).*$",
         "hooks": [
           {
             "type": "command",
@@ -67,6 +67,34 @@
             "args": [
               "${CLAUDE_PLUGIN_ROOT}/hooks/nodrail-hook.mjs"
             ]
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/nodrail-hook.mjs"
+            ],
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/nodrail-hook.mjs"
+            ],
+            "timeout": 30
           }
         ]
       }

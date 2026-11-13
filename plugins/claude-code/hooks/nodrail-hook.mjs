@@ -497,6 +497,12 @@ var actionDigest = (actionId, digest) => sha256(`nodrail:action:v1
 ${actionId}
 ${digest}`);
 
+// ../policy-engine/src/names.ts
+function agentName(text) {
+  const name = text.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^[-_]+/, "").slice(0, 63);
+  return name || "unnamed";
+}
+
 // ../policy-engine/src/redact.ts
 var MAX_INLINE_INPUT = 16 * 1024;
 var REDACTED = "[redacted]";
@@ -714,8 +720,8 @@ function globRoot(pattern) {
   return fixed.join("/");
 }
 function searchCall(input, cwd, filePattern) {
-  const within = nonEmptyText(input.path) ?? cwd;
-  const base = within ? fullPath(within, cwd) : null;
+  const within2 = nonEmptyText(input.path) ?? cwd;
+  const base = within2 ? fullPath(within2, cwd) : null;
   if (!base) return null;
   const glob = nonEmptyText(filePattern);
   const root = glob ? globRoot(glob) : "";
@@ -852,10 +858,24 @@ function otherToolCall(name, input) {
     params: { input_sha256: fingerprint(input) }
   };
 }
+function subagentCall(input) {
+  const name = agentName(
+    nonEmptyText(input.subagent_type) ?? "general-purpose"
+  );
+  return {
+    tool: "claude-code",
+    operation: "agent",
+    resource: { kind: "agent", id: name },
+    params: { subagent_type: name, input_sha256: fingerprint(input) }
+  };
+}
 var whatIsWritten = (input) => input.content;
 var wholeInput = (input) => input;
 var describers = /* @__PURE__ */ new Map([
   ["Bash", (input, _cwd, name) => shellCall(name, input)],
+  ["Agent", (input) => subagentCall(input)],
+  // Claude Code's earlier name for Agent, with the same subagent_type.
+  ["Task", (input) => subagentCall(input)],
   ["PowerShell", (input, _cwd, name) => shellCall(name, input)],
   [
     "Write",
@@ -932,15 +952,146 @@ function hookAnswer(decision, reason) {
 }
 var deny = (reason) => hookAnswer("deny", reason);
 
+// ../policy-engine/src/receipt-block.ts
+var MAX_RECEIPT_TEXT = 8192;
+var SCAN = 16 * 1024;
+var OPENING = /(?:^|\n)(`{3,}|~{3,})[ \t]*nodrail-receipt[ \t]*\n/g;
+function lastOpening(message) {
+  const from = Math.max(0, message.length - SCAN);
+  const tail = message.slice(from);
+  const cutMidLine = from > 0 && message[from - 1] !== "\n";
+  let last;
+  for (const match of tail.matchAll(OPENING))
+    if (match.index > 0 || match[0].startsWith("\n") || !cutMidLine)
+      last = match;
+  if (!last) return null;
+  const newline = last[0].startsWith("\n") ? 1 : 0;
+  return {
+    start: from + last.index + newline,
+    after: from + last.index + last[0].length,
+    fence: last[1] ?? "```"
+  };
+}
+function readReceiptBlock(message) {
+  const opening = lastOpening(message);
+  if (!opening) return null;
+  const text = message.slice(opening.start);
+  if (text.length > MAX_RECEIPT_TEXT) return null;
+  const rest = message.slice(opening.after).trimEnd();
+  if (!rest.endsWith(opening.fence)) return null;
+  const body = rest.slice(0, rest.length - opening.fence.length);
+  return { text, body: body.endsWith("\n") ? body.slice(0, -1) : body };
+}
+function receiptBlock(message) {
+  return readReceiptBlock(message)?.text ?? null;
+}
+
+// ../policy-engine/src/run-key.ts
+import { spawnSync } from "node:child_process";
+import { createHash as createHash2 } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir as homedir2 } from "node:os";
+import { basename as basename2, isAbsolute as isAbsolute2, join as join2, resolve as resolve2 } from "node:path";
+var MAX_KEY = 200;
+function git(cwd, args) {
+  const result = spawnSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    timeout: 2e3
+  });
+  return result.status === 0 ? result.stdout.trim() : "";
+}
+function nodrailDirectory(cwd) {
+  const common = git(cwd, ["rev-parse", "--git-common-dir"]);
+  if (!common) return join2(homedir2(), ".nodrail");
+  return join2(isAbsolute2(common) ? common : resolve2(cwd, common), "nodrail");
+}
+function sessionsDirectory(cwd, env) {
+  if (env.NODRAIL_LEDGER)
+    return join2(resolve2(cwd, env.NODRAIL_LEDGER), "sessions");
+  return join2(nodrailDirectory(cwd), "sessions");
+}
+function repositoryName(remote) {
+  let text = remote.trim();
+  if (/^[a-z]:[\\/]/i.test(text)) return null;
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) {
+    const scp = /^(?:[^@/]+@)?([^/:]+):(?!\/)(.+)$/.exec(text);
+    if (!scp) return null;
+    text = `ssh://${scp[1]}/${scp[2]}`;
+  }
+  if (!URL.canParse(text)) return null;
+  const { hostname, pathname } = new URL(text);
+  const path = pathname.split("/").filter(Boolean).join("/").replace(/\.git$/, "");
+  if (!hostname || !path) return null;
+  return `${hostname.toLowerCase()}/${path}`;
+}
+function isDefaultBranch(cwd, branch) {
+  const head = git(cwd, [
+    "symbolic-ref",
+    "--quiet",
+    "refs/remotes/origin/HEAD"
+  ]);
+  if (head) return head === `refs/remotes/origin/${branch}`;
+  return branch === "main" || branch === "master";
+}
+function computeKey(cwd, sessionId) {
+  const session = sessionId ? `session:${sessionId}` : null;
+  const branch = git(cwd, ["branch", "--show-current"]);
+  if (!branch || isDefaultBranch(cwd, branch)) return session;
+  const remote = repositoryName(git(cwd, ["remote", "get-url", "origin"]));
+  const repo = remote ?? basename2(git(cwd, ["rev-parse", "--show-toplevel"]));
+  return repo ? `${repo}/${branch}` : branch;
+}
+function pinned(file, key) {
+  try {
+    const kept = readFileSync(file, "utf8").trim();
+    if (kept) return kept.slice(0, MAX_KEY);
+  } catch {
+  }
+  const computed = key()?.slice(0, MAX_KEY) ?? null;
+  if (!computed) return null;
+  try {
+    writeFileSync(file, computed, { flag: "wx" });
+    return computed;
+  } catch {
+    try {
+      return readFileSync(file, "utf8").trim().slice(0, MAX_KEY) || computed;
+    } catch {
+      return computed;
+    }
+  }
+}
+function runKey(cwd, sessionId, env = process.env) {
+  const named = env.NODRAIL_RUN?.trim();
+  if (named) return named.slice(0, MAX_KEY);
+  if (!sessionId) return computeKey(cwd, null)?.slice(0, MAX_KEY) ?? null;
+  const directory = sessionsDirectory(cwd, env);
+  try {
+    mkdirSync(directory, { recursive: true });
+  } catch {
+  }
+  const name = createHash2("sha256").update(sessionId).digest("hex");
+  return pinned(
+    join2(directory, name.slice(0, 32)),
+    () => computeKey(cwd, sessionId)
+  );
+}
+
 // src/blocked-text.ts
+var why = {
+  gate: " A gate in your rules holds it until the steps it waits for, such as QA or review, have finished with an accepted verdict after the last change. Run those steps, then try again.",
+  budget: " A budget in your rules for this run or step is used up.",
+  agent_paused: " This agent is paused in Nodrail."
+};
 function blockedText(decision) {
   const reference = decision.reference ? ` Request ${decision.reference}.` : "";
+  const because = (decision.reason && why[decision.reason]) ?? "";
   switch (decision.code) {
     case "APPROVAL_PENDING":
     case "UNKNOWN_PERMISSION_BLOCKED":
-      return `Nodrail: still waiting for a person to review this.${reference} It stays blocked; try again after it is allowed.`;
+      return `Nodrail: still waiting for a person to review this.${reference}${because} It stays blocked; try again after it is allowed.`;
     case "DENIED":
-      return `Nodrail: this action is denied.${reference}`;
+      return `Nodrail: this action is denied.${reference}${because}`;
     case "EXPIRED":
       return `Nodrail: the request expired before anyone decided.${reference}`;
     case "INVALIDATED":
@@ -961,14 +1112,14 @@ function blockedText(decision) {
 }
 
 // src/connection.ts
-import { readFileSync } from "node:fs";
-import { homedir as homedir2 } from "node:os";
-import { join as join2 } from "node:path";
+import { readFileSync as readFileSync2 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { join as join3 } from "node:path";
 var DEFAULT_URL = "https://app.nodrail.com";
 function savedCredential(env) {
   try {
-    return readFileSync(
-      join2(env.NODRAIL_HOME ?? join2(homedir2(), ".nodrail"), "credential"),
+    return readFileSync2(
+      join3(env.NODRAIL_HOME ?? join3(homedir3(), ".nodrail"), "credential"),
       "utf8"
     ).trim();
   } catch {
@@ -1055,7 +1206,7 @@ var NodrailClient = class {
           ...init.headers
         },
         body: init.body ? JSON.stringify(init.body) : void 0,
-        signal: AbortSignal.timeout(this.timeoutMs),
+        signal: AbortSignal.timeout(init.timeoutMs ?? this.timeoutMs),
         redirect: "error"
       });
     } catch {
@@ -1071,13 +1222,22 @@ var NodrailClient = class {
       body: { adapter_version: this.options.adapterVersion }
     });
   }
-  async submit(descriptor, idempotencyKey) {
+  /** The run is context for the decision; it is not part of the digest. */
+  async submit(descriptor, idempotencyKey, run) {
     return asStatus(
       await this.request("/actions", {
-        body: { ...descriptor, adapter_version: this.options.adapterVersion },
+        body: {
+          ...descriptor,
+          ...run ? { run } : {},
+          adapter_version: this.options.adapterVersion
+        },
         headers: { "idempotency-key": idempotencyKey }
       })
     );
+  }
+  /** A step of a run starting or finishing. Grants nothing by itself. */
+  step(event) {
+    return this.request("/steps", { body: event });
   }
   async status(actionId) {
     return asStatus(await this.request(`/actions/${actionId}`));
@@ -1109,6 +1269,18 @@ var NodrailClient = class {
       throw new Blocked("PERMIT_STALE", action.reference);
     return body;
   }
+  /**
+   * Takes back a request nobody has decided, so no one approves a call that
+   * will never run. It never allows anything; a repeat changes nothing.
+   */
+  async withdraw(actionId, options = {}) {
+    return asStatus(
+      await this.request(`/actions/${actionId}/withdraw`, {
+        body: {},
+        timeoutMs: options.timeoutMs
+      })
+    );
+  }
   report(actionId, report) {
     return this.request(`/actions/${actionId}/reports`, {
       body: {
@@ -1120,25 +1292,56 @@ var NodrailClient = class {
     });
   }
 };
-var defaultSleep = (ms) => new Promise((resolve3) => setTimeout(resolve3, ms));
+var defaultSleep = (ms) => new Promise((resolve4) => setTimeout(resolve4, ms));
 function assertSameCall(status, descriptor) {
   const digest = descriptorDigest(status.installation_id, descriptor);
   if (status.descriptor_digest !== digest || status.action_digest !== actionDigest(status.action_id, digest))
     throw new Blocked("DIGEST_MISMATCH", status.reference);
 }
 var waiting = /* @__PURE__ */ new Set(["APPROVAL_PENDING", "UNKNOWN_PERMISSION_BLOCKED"]);
-async function resolve2(client, descriptor, key, { waitMs = 0, pollMs = 2e3, sleep = defaultSleep }) {
-  if (!isPlainJson(descriptor.params)) throw new Blocked("INVALID_ACTION");
-  let status = await client.submit(descriptor, key);
-  assertSameCall(status, descriptor);
+var WITHDRAW_TIMEOUT_MS = 3e3;
+async function withdrawQuietly(client, actionId) {
+  try {
+    await client.withdraw(actionId, { timeoutMs: WITHDRAW_TIMEOUT_MS });
+  } catch {
+  }
+}
+async function pause(ms, sleep, signal) {
+  const slept = (sleep ?? defaultSleep)(ms);
+  if (!signal) return slept;
+  let stop = () => {
+  };
+  const stopped = new Promise((done) => {
+    stop = done;
+    if (signal.aborted) done();
+    else signal.addEventListener("abort", stop, { once: true });
+  });
+  try {
+    await Promise.race([slept, stopped]);
+  } finally {
+    signal.removeEventListener("abort", stop);
+  }
+}
+async function waitForPerson(client, descriptor, submitted, { waitMs = 0, pollMs = 2e3, sleep, signal }) {
+  let status = submitted;
   const deadline = Date.now() + waitMs;
   while (waiting.has(status.code)) {
-    if (Date.now() >= deadline)
+    if (Date.now() >= deadline || signal?.aborted) {
+      if (waitMs > 0) await withdrawQuietly(client, status.action_id);
       throw new Blocked(status.code, status.reference, status.reason);
-    await sleep(pollMs);
+    }
+    await pause(pollMs, sleep, signal);
+    if (signal?.aborted) continue;
     status = await client.status(status.action_id);
     assertSameCall(status, descriptor);
   }
+  return status;
+}
+async function resolve3(client, descriptor, key, options) {
+  if (!isPlainJson(descriptor.params)) throw new Blocked("INVALID_ACTION");
+  const submitted = await client.submit(descriptor, key, options.run);
+  assertSameCall(submitted, descriptor);
+  const status = await waitForPerson(client, descriptor, submitted, options);
   if (status.code !== "READY")
     throw new Blocked(status.code, status.reference, status.reason);
   const permit = await client.permit(status);
@@ -1150,7 +1353,7 @@ async function resolve2(client, descriptor, key, { waitMs = 0, pollMs = 2e3, sle
 }
 async function authorize(client, descriptor, key, options = {}) {
   try {
-    return await resolve2(client, descriptor, key, options);
+    return await resolve3(client, descriptor, key, options);
   } catch (error) {
     return error instanceof Blocked ? {
       allowed: false,
@@ -1162,7 +1365,7 @@ async function authorize(client, descriptor, key, options = {}) {
 }
 
 // src/hooks.ts
-var HOOK_VERSION = "0.1.5";
+var HOOK_VERSION = "0.2.0";
 var HOOK_DEADLINE_MS = 345e3;
 function clientFrom(env, deps) {
   const { url, credential } = resolveConnection(env);
@@ -1173,6 +1376,24 @@ function clientFrom(env, deps) {
     adapterVersion: `${deps.agent ?? "claude-code"}-hook/${HOOK_VERSION}`,
     fetch: deps.fetch
   });
+}
+function stepOf(event) {
+  const id = nonEmptyText(event.agent_id);
+  if (!id) return void 0;
+  return {
+    id: id.slice(0, 200),
+    agent: agentName(nonEmptyText(event.agent_type) ?? "unnamed")
+  };
+}
+function runOf(event, env) {
+  const key = runKey(
+    nonEmptyText(event.cwd) ?? process.cwd(),
+    nonEmptyText(event.session_id),
+    env
+  );
+  if (!key) return void 0;
+  const step = stepOf(event);
+  return step ? { key, step } : { key };
 }
 var readTools = new Set(localReadTools);
 function checkReadLocally(name, event) {
@@ -1185,6 +1406,34 @@ function checkReadLocally(name, event) {
       "Nodrail: this reads a place where credentials live, so it is blocked."
     );
   return { exitCode: 0, stdout: "", stderr: "" };
+}
+var timedOut = {
+  allowed: false,
+  code: "TIMED_OUT",
+  reason: null,
+  reference: null
+};
+async function within(work, ms) {
+  let timer;
+  try {
+    return await Promise.race([
+      work,
+      new Promise((done) => {
+        timer = setTimeout(() => done(null), ms);
+      })
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function decideInTime(ask, deadlineMs) {
+  const stop = new AbortController();
+  const asked = ask(stop.signal);
+  const answer = await within(asked, deadlineMs);
+  if (answer) return answer;
+  stop.abort();
+  await within(asked, WITHDRAW_TIMEOUT_MS + 500);
+  return timedOut;
 }
 async function beforeTool(event, env, deps) {
   const toolName = nonEmptyText(event.tool_name);
@@ -1212,25 +1461,15 @@ async function beforeTool(event, env, deps) {
     return deny(
       "Nodrail: this call could not be described for review, so it is blocked."
     );
-  let timer;
-  const decision = await Promise.race([
-    authorize(client, descriptor, key, {
+  const decision = await decideInTime(
+    (signal) => authorize(client, descriptor, key, {
       waitMs: waitMsFrom(env),
-      sleep: deps.sleep
+      sleep: deps.sleep,
+      run: runOf(event, env),
+      signal
     }),
-    new Promise((done) => {
-      timer = setTimeout(
-        () => done({
-          allowed: false,
-          code: "TIMED_OUT",
-          reason: null,
-          reference: null
-        }),
-        deps.deadlineMs ?? HOOK_DEADLINE_MS
-      );
-    })
-  ]);
-  clearTimeout(timer);
+    deps.deadlineMs ?? HOOK_DEADLINE_MS
+  );
   return decision.allowed ? allowQuietly : deny(blockedText(decision));
 }
 function toolFailed(event) {
@@ -1256,6 +1495,23 @@ async function afterTool(event, env, deps) {
         ...event.hook_event_name === "PostToolUseFailure" ? { interrupted: event.is_interrupt === true } : {}
       }
     });
+  } catch {
+  }
+  return allowQuietly;
+}
+async function onStep(event, env, deps) {
+  const client = clientFrom(env, deps);
+  const run = runOf(event, env);
+  const step = run?.step;
+  if (!client || !run || !step) return allowQuietly;
+  const body = { run: { key: run.key }, step, event: "started" };
+  if (event.hook_event_name === "SubagentStop") {
+    const block = receiptBlock(nonEmptyText(event.last_assistant_message) ?? "");
+    body.event = "finished";
+    if (block) body.receipt = { text: block };
+  }
+  try {
+    await client.step(body);
   } catch {
   }
   return allowQuietly;
@@ -1299,6 +1555,9 @@ async function runHook(stdin, env, deps = {}) {
       return afterTool(event, env, deps);
     case "SessionStart":
       return onSessionStart(env, deps);
+    case "SubagentStart":
+    case "SubagentStop":
+      return onStep(event, env, deps);
     default:
       return deny(
         "Nodrail: unsupported hook event, so this action is blocked."
