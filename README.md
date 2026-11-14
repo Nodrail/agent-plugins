@@ -61,7 +61,7 @@ Self-hosting? Also set `NODRAIL_URL`.
 | Reads (Read, Grep, Glob) | Checked on your machine for places credentials live, not sent to Nodrail | Through the shell, like any command |
 | Starting a subagent | Yes (tool `claude-code`, operation `agent`, the subagent's type as resource) | No |
 
-**Run-history walkthrough preview.** Recording subagent steps and reading receipts requires a plugin build that supports those events. The integration coverage table above describes the tool calls each plugin checks.
+**Run-history walkthrough preview.** Recording subagent steps and reading receipts requires plugin 0.2.0 or later. The integration coverage table above describes the tool calls each plugin checks.
 
 Claude Code also sends each subagent's start and stop to Nodrail as a step of
 the run, with the receipt block it ended with, so gates in your rules can wait
