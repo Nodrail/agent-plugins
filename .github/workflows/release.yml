@@ -31,7 +31,16 @@ jobs:
           if gh release view "v$version" >/dev/null 2>&1; then
             echo "v$version is already released."
           else
+            # What changed is the client's changelog for this version.
+            changelog=https://github.com/Nodrail/nodrail-js/blob/main/packages/client/CHANGELOG.md
+            changes=$(curl -fsSL https://raw.githubusercontent.com/Nodrail/nodrail-js/main/packages/client/CHANGELOG.md \
+              | awk -v heading="## $version" '$0 == heading { on = 1; next } /^## / { on = 0 } on')
+            {
+              echo "Ships the hook from [@nodrail/client $version](https://www.npmjs.com/package/@nodrail/client/v/$version)."
+              echo
+              if [ -n "$changes" ]; then echo "## What changed"; echo "$changes"; echo; fi
+              echo "Full history and upgrade notes: [client changelog]($changelog)."
+            } > "$RUNNER_TEMP/notes.md"
             gh release create "v$version" --target "$GITHUB_SHA" --title "v$version" \
-              --notes "Ships the hook from [@nodrail/client $version](https://www.npmjs.com/package/@nodrail/client/v/$version)." \
-              --generate-notes
+              --notes-file "$RUNNER_TEMP/notes.md" --generate-notes
           fi

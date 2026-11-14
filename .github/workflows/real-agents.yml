@@ -54,20 +54,13 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-      # Exact versions: the agents this checks against, and the client whose
-      # hook the plugins ship.
-      - name: Install the agent and the client the plugins ship
+      # Exact versions with checksums, from tools/package-lock.json: the agents
+      # this checks against, and the client whose hook the plugins ship.
+      - name: Install the agents and the client the plugins ship
         if: steps.key.outputs.present == 'true'
-        env:
-          AGENT: ${{ matrix.agent }}
-        run: | # zizmor: ignore[adhoc-packages]
-          version=$(node -p 'require("./plugins/claude-code/.claude-plugin/plugin.json").version')
-          if [ "$AGENT" = claude-code ]; then
-            npm install --global @anthropic-ai/claude-code@2.1.322 # zizmor: ignore[adhoc-packages]
-          else
-            npm install --global @openai/codex@0.155.1 # zizmor: ignore[adhoc-packages]
-          fi
-          npm install --prefix "$RUNNER_TEMP/client" --no-audit --no-fund "@nodrail/client@$version" # zizmor: ignore[adhoc-packages]
+        run: |
+          npm ci --prefix tools --no-audit --no-fund
+          echo "$GITHUB_WORKSPACE/tools/node_modules/.bin" >> "$GITHUB_PATH"
       - name: Run a real session
         if: steps.key.outputs.present == 'true'
         env:
@@ -75,4 +68,4 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          NODRAIL_CLIENT_DIR="$RUNNER_TEMP/client/node_modules/@nodrail/client" node scripts/real-agents.mjs "$AGENT"
+          NODRAIL_CLIENT_DIR="$GITHUB_WORKSPACE/tools/node_modules/@nodrail/client" node scripts/real-agents.mjs "$AGENT"

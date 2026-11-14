@@ -1,0 +1,9 @@
+{
+  "name": "nodrail-agent-plugins",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node scripts/check.mjs && node scripts/verify-hook.mjs"
+  },
+  "license": "Apache-2.0"
+}
