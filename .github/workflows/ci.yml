@@ -27,7 +27,12 @@ jobs:
         run: node scripts/check.mjs
       - name: The hook is the one published in @nodrail/client
         run: node scripts/verify-hook.mjs
+      # Exact versions with checksums, from tools/package-lock.json.
+      - name: Install the pinned checking tools
+        run: npm ci --prefix tools --no-audit --no-fund
       - name: Claude Code accepts the marketplace and the plugin
         run: |
-          npx --yes @anthropic-ai/claude-code@2.1.322 plugin validate --strict .
-          npx --yes @anthropic-ai/claude-code@2.1.322 plugin validate --strict plugins/claude-code
+          tools/node_modules/.bin/claude plugin validate --strict .
+          tools/node_modules/.bin/claude plugin validate --strict plugins/claude-code
+      - name: Random events never get past the unconfigured hook
+        run: node tools/fuzz-hook.js

@@ -1,0 +1,16 @@
+{
+  "name": "nodrail-plugin-checks",
+  "private": true,
+  "description": "What CI installs to check the plugins, pinned with checksums by package-lock.json. Install with npm ci.",
+  "type": "module",
+  "scripts": {
+    "fuzz": "node fuzz-hook.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-code": "2.1.322",
+    "@nodrail/client": "0.2.1",
+    "@openai/codex": "0.155.1",
+    "fast-check": "4.10.2"
+  },
+  "license": "Apache-2.0"
+}

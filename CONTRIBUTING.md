@@ -15,9 +15,11 @@ Thanks for helping.
 Needs Node 22 or later.
 
 ```sh
-node scripts/check.mjs
-npx @anthropic-ai/claude-code@2.1.322 plugin validate --strict .
-npx @anthropic-ai/claude-code@2.1.322 plugin validate --strict plugins/claude-code
+npm test                   # manifests, the unconfigured hook, and the hook on npm
+npm ci --prefix tools      # the exact versions CI uses, pinned by checksum
+tools/node_modules/.bin/claude plugin validate --strict .
+tools/node_modules/.bin/claude plugin validate --strict plugins/claude-code
+node tools/fuzz-hook.js    # random events against the unconfigured hook
 ```
 
 To try your copy, add this folder as a marketplace instead of
@@ -37,6 +39,9 @@ See [names and descriptions](https://github.com/Nodrail/.github/blob/main/CONTRI
 - Keep both plugins on the same version, and raise it when users would notice the
   change. Merging a new version tags it and writes its release.
 - Describe how you tried it, with which agent and version.
+- Add or update a check in `scripts/check.mjs` for any change to the manifests
+  or marketplaces. A change to what the hook checks needs a test in
+  `packages/client/tests` in nodrail-js.
 
 Contributions are made under the [Apache-2.0](LICENSE) licence, as its section 5
 describes. Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md).

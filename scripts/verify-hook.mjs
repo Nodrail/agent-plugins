@@ -15,6 +15,14 @@ const { version } = JSON.parse(
   ),
 );
 const spec = `@nodrail/client@${version}`;
+// CI runs the agents against the client tools/package-lock.json pins.
+const pinned = JSON.parse(
+  readFileSync(join(root, "tools/package-lock.json"), "utf8"),
+).packages["node_modules/@nodrail/client"]?.version;
+if (pinned !== version)
+  throw new Error(
+    `tools/package-lock.json pins @nodrail/client ${pinned}, not ${version}. Run npm install @nodrail/client@${version} --save-exact in tools.`,
+  );
 const folder = mkdtempSync(join(tmpdir(), "nodrail-hook-"));
 const npm = (args) =>
   execFileSync("npm", args, { cwd: folder, encoding: "utf8", stdio: "pipe" });
