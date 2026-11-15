@@ -6,6 +6,7 @@ These plugins use a Nodrail workspace credential. For a Claude Code setup that r
 
 [![Check plugins](https://github.com/Nodrail/agent-plugins/actions/workflows/ci.yml/badge.svg)](https://github.com/Nodrail/agent-plugins/actions/workflows/ci.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/Nodrail/agent-plugins/badge)](https://scorecard.dev/viewer/?uri=github.com/Nodrail/agent-plugins)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/16693/badge)](https://www.bestpractices.dev/projects/16693)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 Start in Nodrail: **Agents → Connect an agent**, and copy the credential. It is
@@ -85,6 +86,10 @@ For a subagent to report a verdict, end its definition (for example
 A patch that touches several files, or renames one, is its own operation (tool
 `files`, operation `file.patch`), so a rule for one folder can't let a second
 file through.
+
+### Repository merge checks (GitHub pilot)
+
+The plugins above check supported tools when an agent tries to use them. For [PR #11](https://github.com/Nodrail/agent-plugins/pull/11), we separately ran a local adapter and configured GitHub to require its status on the target branch. Installing a Claude Code or Codex plugin does not configure branch protection. [Read the GitHub merge check pilot](https://nodrail.com/guides/github-merge-check-ai-agent-qa).
 
 ## When something goes wrong
 
