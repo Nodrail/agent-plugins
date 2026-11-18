@@ -605,16 +605,22 @@ function redactJson(value) {
 }
 
 // ../policy-engine/src/paths.ts
-import { realpathSync } from "node:fs";
+import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
-function canonicalPath(path) {
+function canonicalPath(path, hops = 0) {
   const missing = [];
   let existing = path;
   for (; ; ) {
     try {
-      return join(realpathSync.native(existing), ...missing.reverse());
+      return join(realpathSync.native(existing), ...[...missing].reverse());
     } catch {
+      const target = linkTarget(existing);
+      if (target !== null && hops < MAX_LINKS)
+        return canonicalPath(
+          join(resolve(dirname(existing), target), ...[...missing].reverse()),
+          hops + 1
+        );
       const parent = dirname(existing);
       if (parent === existing) return path;
       missing.push(basename(existing));
@@ -622,9 +628,18 @@ function canonicalPath(path) {
     }
   }
 }
+var MAX_LINKS = 40;
+function linkTarget(path) {
+  try {
+    return lstatSync(path).isSymbolicLink() ? readlinkSync(path) : null;
+  } catch {
+    return null;
+  }
+}
 var partsOf = (path) => [
   ...new Set(path.split(/[\\/]/).filter(Boolean).flatMap(nameForms))
 ];
+var fileName = (path) => path.split(/[\\/]/).pop() ?? "";
 var MAX_PATH = 4096;
 var MAX_DEPTH = 256;
 function fullPath(raw, cwd) {
@@ -706,6 +721,7 @@ function fileCall({ operation, pathField, content }, input, cwd) {
     params: {
       path,
       path_parts: partsOf(path),
+      file_name: fileName(path),
       ...insideCwd(path, cwd),
       content_sha256: fingerprint(content(input))
     }
@@ -808,6 +824,7 @@ function patchCall(input, cwd) {
       params: {
         path: only,
         path_parts: partsOf(only),
+        file_name: fileName(only),
         ...insideCwd(only, cwd),
         content_sha256
       }
@@ -1365,7 +1382,7 @@ async function authorize(client, descriptor, key, options = {}) {
 }
 
 // src/hooks.ts
-var HOOK_VERSION = "0.2.1";
+var HOOK_VERSION = "0.3.0";
 var HOOK_DEADLINE_MS = 345e3;
 function clientFrom(env, deps) {
   const { url, credential } = resolveConnection(env);
