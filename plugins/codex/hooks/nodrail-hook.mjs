@@ -503,6 +503,46 @@ function agentName(text) {
   return name || "unnamed";
 }
 
+// ../policy-engine/src/text.ts
+var nonEmptyText = (value) => typeof value === "string" && value ? value : null;
+
+// ../policy-engine/src/codex-actions.ts
+function codexSubagentCall(input) {
+  const name = agentName(nonEmptyText(input.agent_type) ?? "default");
+  return {
+    tool: "codex",
+    operation: "agent",
+    resource: { kind: "agent", id: name },
+    params: { agent_type: name, input_sha256: fingerprint(input) }
+  };
+}
+function codexCollaborationCall(name, input) {
+  return {
+    tool: "codex",
+    operation: name.replace(/^collaboration/, ""),
+    resource: { kind: "tool", id: name },
+    params: { input_sha256: fingerprint(input) }
+  };
+}
+var CODEX_COLLABORATION = [
+  "wait_agent",
+  "send_input",
+  "send_message",
+  "followup_task",
+  "resume_agent",
+  "interrupt_agent",
+  "close_agent",
+  "list_agents"
+];
+var codexDescribers = [
+  ["collaborationspawn_agent", codexSubagentCall],
+  ["spawn_agent", codexSubagentCall],
+  ...CODEX_COLLABORATION.flatMap((name) => [
+    [`collaboration${name}`, (input) => codexCollaborationCall(name, input)],
+    [name, (input) => codexCollaborationCall(name, input)]
+  ])
+];
+
 // ../policy-engine/src/redact.ts
 var MAX_INLINE_INPUT = 16 * 1024;
 var REDACTED = "[redacted]";
@@ -670,7 +710,6 @@ function containsHome(path) {
 // ../policy-engine/src/actions.ts
 var MAX_RESOURCE = 512;
 var MAX_COMMAND_ID = MAX_RESOURCE - 42;
-var nonEmptyText = (value) => typeof value === "string" && value ? value : null;
 var clip = (value, max) => value.length <= max ? value : `${value.slice(0, max)}\u2026 [shortened]`;
 function commandAction(shape, original, extra) {
   const visible = bounded(shape.text);
@@ -886,13 +925,25 @@ function subagentCall(input) {
     params: { subagent_type: name, input_sha256: fingerprint(input) }
   };
 }
+function skillCall(input) {
+  const parts = (nonEmptyText(input.skill) ?? "unnamed").split(":");
+  const name = parts.map(agentName).join(":");
+  return {
+    tool: "claude-code",
+    operation: "skill",
+    resource: { kind: "skill", id: name },
+    params: { skill: name, input_sha256: fingerprint(input) }
+  };
+}
 var whatIsWritten = (input) => input.content;
 var wholeInput = (input) => input;
-var describers = /* @__PURE__ */ new Map([
+var describers = new Map([
   ["Bash", (input, _cwd, name) => shellCall(name, input)],
   ["Agent", (input) => subagentCall(input)],
   // Claude Code's earlier name for Agent, with the same subagent_type.
   ["Task", (input) => subagentCall(input)],
+  ["Skill", (input) => skillCall(input)],
+  ...codexDescribers,
   ["PowerShell", (input, _cwd, name) => shellCall(name, input)],
   [
     "Write",
@@ -1010,12 +1061,17 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { basename as basename2, isAbsolute as isAbsolute2, join as join2, resolve as resolve2 } from "node:path";
 var MAX_KEY = 200;
+var GIT_TIMEOUT_MS = 5e3;
 function git(cwd, args) {
   const result = spawnSync("git", args, {
     cwd,
     encoding: "utf8",
-    timeout: 2e3
+    timeout: GIT_TIMEOUT_MS
   });
+  if (result.error?.code === "ETIMEDOUT")
+    throw new Error(
+      `git didn't answer within ${GIT_TIMEOUT_MS / 1e3} s, so the run's history can't be found.`
+    );
   return result.status === 0 ? result.stdout.trim() : "";
 }
 function nodrailDirectory(cwd) {
@@ -1382,7 +1438,7 @@ async function authorize(client, descriptor, key, options = {}) {
 }
 
 // src/hooks.ts
-var HOOK_VERSION = "0.3.0";
+var HOOK_VERSION = "0.5.2";
 var HOOK_DEADLINE_MS = 345e3;
 function clientFrom(env, deps) {
   const { url, credential } = resolveConnection(env);
@@ -1478,11 +1534,19 @@ async function beforeTool(event, env, deps) {
     return deny(
       "Nodrail: this call could not be described for review, so it is blocked."
     );
+  let run;
+  try {
+    run = runOf(event, env);
+  } catch (error) {
+    return deny(
+      `Nodrail: ${error.message} So this action is blocked.`
+    );
+  }
   const decision = await decideInTime(
     (signal) => authorize(client, descriptor, key, {
       waitMs: waitMsFrom(env),
       sleep: deps.sleep,
-      run: runOf(event, env),
+      run,
       signal
     }),
     deps.deadlineMs ?? HOOK_DEADLINE_MS
@@ -1518,7 +1582,12 @@ async function afterTool(event, env, deps) {
 }
 async function onStep(event, env, deps) {
   const client = clientFrom(env, deps);
-  const run = runOf(event, env);
+  let run;
+  try {
+    run = runOf(event, env);
+  } catch {
+    return allowQuietly;
+  }
   const step = run?.step;
   if (!client || !run || !step) return allowQuietly;
   const body = { run: { key: run.key }, step, event: "started" };
