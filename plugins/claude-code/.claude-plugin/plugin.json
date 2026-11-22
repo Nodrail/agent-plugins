@@ -1,7 +1,7 @@
 {
   "name": "nodrail",
-  "version": "0.6.0",
-  "description": "Check covered Claude Code tool calls against workspace policies and request human review in Nodrail Cloud.",
+  "version": "0.7.0",
+  "description": "Allow or deny covered Claude Code tool calls with the policy in your Nodrail control plane, self-hosted or Nodrail Cloud.",
   "author": {
     "name": "Nodrail",
     "email": "hello@nodrail.com"

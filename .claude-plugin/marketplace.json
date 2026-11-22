@@ -1,12 +1,12 @@
 {
   "name": "nodrail",
   "owner": { "name": "Nodrail", "email": "hello@nodrail.com" },
-  "description": "Cloud-connected permission checks for supported agent tools.",
+  "description": "Nodrail plugins: allow or deny supported agent tool calls with your Nodrail control plane.",
   "plugins": [
     {
       "name": "nodrail",
       "source": "./plugins/claude-code",
-      "description": "Check covered Claude Code tool calls against workspace policies and request human review in Nodrail Cloud."
+      "description": "Allow or deny covered Claude Code tool calls with the policy in your Nodrail control plane, self-hosted or Nodrail Cloud."
     }
   ]
 }

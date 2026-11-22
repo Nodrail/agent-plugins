@@ -1108,12 +1108,12 @@ function describeToolCall(name, input, cwd = null) {
   return described && described.resource.id.length <= MAX_RESOURCE ? described : null;
 }
 var allowQuietly = { stdout: "", stderr: "", exitCode: 0 };
-function hookAnswer(decision, reason) {
+function deny(reason) {
   return {
     stdout: JSON.stringify({
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
-        permissionDecision: decision,
+        permissionDecision: "deny",
         permissionDecisionReason: reason
       }
     }),
@@ -1121,7 +1121,6 @@ function hookAnswer(decision, reason) {
     exitCode: 0
   };
 }
-var deny = (reason) => hookAnswer("deny", reason);
 
 // ../policy-engine/src/receipt-block.ts
 var MAX_RECEIPT_TEXT = 8192;
@@ -1358,6 +1357,7 @@ function receiptText(message, agent) {
 var why = {
   gate: " A gate in your rules holds it until the steps it waits for, such as QA or review, have finished with an accepted verdict after the last change. Run those steps, then try again.",
   budget: " A budget in your rules for this run or step is used up.",
+  no_rule: " No rule covers this call. If it should run, add a rule that allows it, then try again.",
   agent_paused: " This agent is paused in Nodrail."
 };
 var fixed = {
@@ -1376,17 +1376,14 @@ function blockedText(decision) {
   const reference = decision.reference ? ` Request ${decision.reference}.` : "";
   const because = (decision.reason && why[decision.reason]) ?? "";
   switch (decision.code) {
-    case "APPROVAL_PENDING":
-    case "UNKNOWN_PERMISSION_BLOCKED":
-      return `Nodrail: still waiting for a person to review this.${reference}${because} It stays blocked; try again after it is allowed.`;
     case "DENIED":
       return `Nodrail: this action is denied.${reference}${because}`;
     case "EXPIRED":
-      return `Nodrail: the request expired before anyone decided.${reference}`;
+      return `Nodrail: the request expired before it was used.${reference} Try again.`;
     case "INVALIDATED":
       return `Nodrail: the request was closed because something changed.${reference} Try again to ask for a new decision.`;
     default:
-      return `Nodrail: could not confirm this action is allowed (${decision.code}), so it is blocked.`;
+      return `Nodrail: could not confirm this action is allowed (${decision.code}), so it is denied.${reference}${because}`;
   }
 }
 
@@ -1410,11 +1407,6 @@ function resolveConnection(env) {
     url: env.NODRAIL_URL || env.CLAUDE_PLUGIN_OPTION_URL || DEFAULT_URL,
     credential: env.NODRAIL_CREDENTIAL || env.CLAUDE_PLUGIN_OPTION_CREDENTIAL || savedCredential(env) || null
   };
-}
-var DEFAULT_WAIT_SECONDS = 300;
-function waitMsFrom(env) {
-  const seconds = Number(env.NODRAIL_WAIT_SECONDS ?? DEFAULT_WAIT_SECONDS);
-  return Number.isFinite(seconds) ? Math.max(0, seconds) * 1e3 : 0;
 }
 
 // src/setup.ts
@@ -1611,52 +1603,11 @@ function assertSameCall(status, descriptor) {
   if (status.descriptor_digest !== digest || status.action_digest !== actionDigest(status.action_id, digest))
     throw new Blocked("DIGEST_MISMATCH", status.reference);
 }
-var waiting = /* @__PURE__ */ new Set(["APPROVAL_PENDING", "UNKNOWN_PERMISSION_BLOCKED"]);
-var WITHDRAW_TIMEOUT_MS = 3e3;
-async function withdrawQuietly(client, actionId) {
-  try {
-    await client.withdraw(actionId, { timeoutMs: WITHDRAW_TIMEOUT_MS });
-  } catch {
-  }
-}
-async function pause(ms, sleep, signal) {
-  const slept = (sleep ?? defaultSleep)(ms);
-  if (!signal) return slept;
-  let stop = () => {
-  };
-  const stopped = new Promise((done) => {
-    stop = done;
-    if (signal.aborted) done();
-    else signal.addEventListener("abort", stop, { once: true });
-  });
-  try {
-    await Promise.race([slept, stopped]);
-  } finally {
-    signal.removeEventListener("abort", stop);
-  }
-}
-async function waitForPerson(client, descriptor, submitted, { waitMs = 0, pollMs = 2e3, sleep, signal }) {
-  let status = submitted;
-  const deadline = Date.now() + waitMs;
-  while (waiting.has(status.code)) {
-    if (Date.now() >= deadline || signal?.aborted) {
-      if (waitMs > 0) await withdrawQuietly(client, status.action_id);
-      throw new Blocked(status.code, status.reference, status.reason);
-    }
-    await pause(pollMs, sleep, signal);
-    if (signal?.aborted) continue;
-    status = await client.status(status.action_id);
-    assertSameCall(status, descriptor);
-  }
-  return status;
-}
-async function resolve4(client, descriptor, key, options) {
+async function resolve4(client, descriptor, key, { run, subject }) {
   if (!isPlainJson(descriptor.params)) throw new Blocked("INVALID_ACTION");
-  const { run, subject } = options;
   const read = () => run && subject !== void 0 ? readSubject(subject) : void 0;
-  const submitted = await client.submit(descriptor, key, run, read());
-  assertSameCall(submitted, descriptor);
-  const status = await waitForPerson(client, descriptor, submitted, options);
+  const status = await client.submit(descriptor, key, run, read());
+  assertSameCall(status, descriptor);
   if (status.code !== "READY")
     throw new Blocked(status.code, status.reference, status.reason);
   const permit = await client.permit(status, read());
@@ -1754,6 +1705,15 @@ var NodrailClient = class {
     });
   }
   /**
+   * The live policy of this credential's environment (`policy:read`): its
+   * revision, the project and lock it came from, and the file it was
+   * published from with its SHA-256, null when it was made on screen. A
+   * host compares the digest with its own lock's.
+   */
+  async policy() {
+    return await this.request("/policy");
+  }
+  /**
    * The run is context for the decision; it is not part of the digest. With
    * a run, `subject` is the work revision it is at (null: unknown), which a
    * gate on the revision checks evidence against.
@@ -1780,12 +1740,23 @@ var NodrailClient = class {
       return send(false);
     }
   }
+  /**
+   * Calls the hook decided on this host (`decisions:write`), for Nodrail to
+   * record in their runs and Activity; it never decides them again. At most
+   * 100 per call. Each answer, in order, is the row's id or why that item
+   * wasn't recorded; a retry with the same keys answers the same rows.
+   */
+  async decisions(batch) {
+    const body = await this.request("/decisions", {
+      body: { decisions: batch }
+    });
+    if (!isRecord2(body) || !Array.isArray(body.results))
+      throw new Blocked("INVALID_RESPONSE");
+    return body.results;
+  }
   /** A step of a run starting or finishing. Grants nothing by itself. */
   step(event) {
     return this.request("/steps", { body: event });
-  }
-  async status(actionId) {
-    return asStatus(await this.request(`/actions/${actionId}`));
   }
   async findByKey(idempotencyKey) {
     return asStatus(
@@ -1797,7 +1768,7 @@ var NodrailClient = class {
   /**
    * Verifies the answer is fresh and exactly for this call before trusting
    * it. `subject`: the work revision at permit time (null: unknown), sent
-   * again because the work may have changed while a person decided.
+   * again because the work may have changed since the call was submitted.
    */
   async permit(action, subject) {
     const nonce = randomBytes(24).toString("hex");
@@ -1824,18 +1795,6 @@ var NodrailClient = class {
     if (!(lifetime > 0) || lifetime > 6e4 || Date.now() - startedAt >= lifetime)
       throw new Blocked("PERMIT_STALE", action.reference);
     return body;
-  }
-  /**
-   * Takes back a request nobody has decided, so no one approves a call that
-   * will never run. It never allows anything; a repeat changes nothing.
-   */
-  async withdraw(actionId, options = {}) {
-    return asStatus(
-      await this.request(`/actions/${actionId}/withdraw`, {
-        body: {},
-        timeoutMs: options.timeoutMs
-      })
-    );
   }
   /**
    * What happened to an action. `key` makes it idempotent: a transient
@@ -1865,17 +1824,17 @@ var NodrailClient = class {
         return await this.compatible(send, Boolean(measured?.length));
       } catch (error) {
         if (alreadyIn(error)) return { recorded: true };
-        const pause2 = REPORT_RETRY_MS[attempt];
-        if (!transient(error) || pause2 === void 0) throw error;
-        await sleep(pause2);
+        const pause = REPORT_RETRY_MS[attempt];
+        if (!transient(error) || pause === void 0) throw error;
+        await sleep(pause);
       }
     }
   }
 };
 
 // src/hooks.ts
-var HOOK_VERSION = "0.6.0";
-var HOOK_DEADLINE_MS = 345e3;
+var HOOK_VERSION = "0.7.0";
+var HOOK_DEADLINE_MS = 25e3;
 function clientFrom(env, deps) {
   const { url, credential } = resolveConnection(env);
   if (!credential) return null;
@@ -1936,13 +1895,7 @@ async function within(work, ms) {
   }
 }
 async function decideInTime(ask, deadlineMs) {
-  const stop = new AbortController();
-  const asked = ask(stop.signal);
-  const answer = await within(asked, deadlineMs);
-  if (answer) return answer;
-  stop.abort();
-  await within(asked, WITHDRAW_TIMEOUT_MS + 500);
-  return timedOut;
+  return await within(ask, deadlineMs) ?? timedOut;
 }
 async function beforeTool(event, env, deps) {
   const toolName = nonEmptyText(event.tool_name);
@@ -1967,9 +1920,7 @@ async function beforeTool(event, env, deps) {
     );
   const descriptor = describeToolCall(name, input, nonEmptyText(event.cwd));
   if (!descriptor)
-    return deny(
-      "Nodrail: this call could not be described for review, so it is blocked."
-    );
+    return deny("Nodrail: this call could not be described, so it is blocked.");
   let run;
   try {
     run = runOf(event, env);
@@ -1984,11 +1935,8 @@ async function beforeTool(event, env, deps) {
   });
   if ("refusal" in fields) return deny(fields.refusal);
   const decision = await decideInTime(
-    (signal) => authorize(client, fields.action, key, {
-      waitMs: waitMsFrom(env),
-      sleep: deps.sleep,
+    authorize(client, fields.action, key, {
       run,
-      signal,
       // The work the agent's session is in, as the runtime reads it.
       subject: revisionAt(nonEmptyText(event.cwd) ?? process.cwd())
     }),

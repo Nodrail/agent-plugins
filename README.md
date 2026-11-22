@@ -1,8 +1,8 @@
-# Nodrail Cloud plugins for Claude Code and Codex
+# Nodrail plugins for Claude Code and Codex
 
-Check supported tool calls against your workspace’s policies before they run. A covered action that needs human review waits in **Approvals**. Your team keeps the agent runtime and provider credentials.
+Check supported tool calls against the policy in your Nodrail control plane, self-hosted or Nodrail Cloud, before they run. Each call is allowed or denied at once, with the reason; nothing waits for a person. Your team keeps the agent runtime and provider credentials.
 
-These plugins use a Nodrail workspace credential. For a Claude Code setup that reads an APF file locally, follow the [local quickstart](https://nodrail.com/docs/quickstart). For Codex, use the Cloud plugin below and review its activation and startup behavior under **When something goes wrong**.
+These plugins use a Nodrail workspace credential and send each call to the control plane through its host API. To set up hosts from a repository instead, with the policy decided on the machine, declare them in `nodrail.yaml` and run `nodrail plan` and `nodrail apply` ([`@nodrail/cli`](https://www.npmjs.com/package/@nodrail/cli)). For Codex, use the plugin below and review its activation and startup behavior under **When something goes wrong**.
 
 [![Check plugins](https://github.com/Nodrail/agent-plugins/actions/workflows/ci.yml/badge.svg)](https://github.com/Nodrail/agent-plugins/actions/workflows/ci.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/Nodrail/agent-plugins/badge)](https://scorecard.dev/viewer/?uri=github.com/Nodrail/agent-plugins)
@@ -70,13 +70,13 @@ for steps such as QA. The run is `NODRAIL_RUN`, else `<repo>/<branch>` where the
 session started (such as `github.com/acme/app/feature/login`), kept for the
 whole session even if you switch branch, or the session itself on the default
 branch. Add a rule that allows `claude-code` `agent` for the subagents you use,
-or each start waits for a person. `Task`, Claude Code's earlier name for
+or each start is denied. `Task`, Claude Code's earlier name for
 `Agent`, is checked the same way.
 
 **Upgrading:** earlier versions of the Claude Code plugin didn't check starting
 a subagent. Now they do, with the subagent's type as a resource of type `agent`
 (`vercel:deployment-expert` becomes `vercel-deployment-expert`). Until a rule
-allows it, each start waits for a person.
+allows it, each start is denied.
 
 For a subagent to report a verdict, end its definition (for example
 `.claude/agents/qa.md`) with an instruction to finish its final message with a
@@ -93,8 +93,8 @@ The plugins above check supported tools when an agent tries to use them. For [PR
 
 ## When something goes wrong
 
-If Nodrail can't be reached, the credential is refused, or a person doesn't
-answer in time, the action is blocked. Each session also starts with a notice if
+If Nodrail can't be reached, the credential is refused, or Nodrail doesn't
+answer within 25 seconds, the action is blocked. Each session also starts with a notice if
 the credential is missing or refused.
 
 - **Claude Code** blocks even if the hook itself crashes, through `onFailure`.
@@ -108,14 +108,15 @@ around the hook. This is a control for agents, not a sandbox.
 ## What leaves your machine
 
 File contents never do, only a fingerprint and the path. Commands, URLs and MCP
-inputs are sent so a person can review them, with anything that looks like a
-secret removed. That filter is best effort.
+inputs are sent so rules can decide them and Activity can show them, with
+anything that looks like a secret removed. That filter is best effort.
 
-## Waiting for a person
+## Denied calls
 
-A call no rule covers waits up to 5 minutes for someone to allow or deny it in
-Nodrail, then counts as blocked; the agent is told why and can try again. Set
-`NODRAIL_WAIT_SECONDS` to change the wait (`0` blocks at once).
+A call no rule covers is denied, and so is one an unmet gate or a used-up
+budget holds back. The agent is told why, so it can meet what is missing (run
+the review step a gate waits for, say) and try again. Nothing waits for a
+person.
 
 ## Turning it off
 
