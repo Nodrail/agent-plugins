@@ -1,6 +1,6 @@
 {
   "name": "nodrail",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "description": "Check supported Codex tool calls against workspace policies with the Nodrail Cloud plugin.",
   "homepage": "https://nodrail.com",
   "license": "Apache-2.0",

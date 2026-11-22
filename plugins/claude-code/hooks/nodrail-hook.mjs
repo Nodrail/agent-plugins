@@ -148,6 +148,82 @@ function globCouldReachSecret(glob) {
 }
 
 // ../policy-engine/src/commands.ts
+var rtkPrograms = new Set(
+  `git gh glab aws psql pnpm docker kubectl oc curl wget cargo go deno bun bunx
+   npx dotnet tsc jest vitest playwright prisma prettier ruff mypy pytest rspec
+   rubocop rake ls tree find grep rg ast-grep wc gt`.split(/\s+/)
+);
+var rtkRunners = /* @__PURE__ */ new Set([
+  "bypass",
+  "proxy",
+  "err",
+  "test",
+  "summary",
+  "run"
+]);
+var rtkOwn = new Set(
+  `gain discover session cc-economics hook-audit methods pipeline plugins tasks
+   telemetry config init trust untrust verify read smart json deps env log learn
+   recall rewrite help -h --help -V --version`.split(/\s+/)
+);
+function unwrapRtk(words) {
+  let at = 1;
+  while (/^(?:-v{1,3}|--verbose|--skip-env)$/.test(words[at] ?? "")) at += 1;
+  const sub = words[at] ?? "";
+  if (rtkOwn.has(sub)) return { words, via: [] };
+  if (rtkPrograms.has(sub))
+    return { words: words.slice(at), via: words.slice(0, at) };
+  if (!rtkRunners.has(sub)) return null;
+  at += 1;
+  while (words[at] === "--skip-env") at += 1;
+  if (words[at]?.startsWith("-")) return null;
+  return { words: words.slice(at), via: words.slice(0, at) };
+}
+function prefixLength(words) {
+  const [program, ...args] = words;
+  const flags = (pattern) => {
+    let at = 0;
+    while (pattern.test(args[at] ?? "")) at += 1;
+    return at + 1;
+  };
+  switch (program) {
+    case "nohup":
+      return 1;
+    case "time":
+      return flags(/^-p$/);
+    case "caffeinate":
+      return flags(/^-[dimsu]+$/);
+    case "nice":
+      if (/^-\d{1,2}$/.test(args[0] ?? "")) return 2;
+      return args[0] === "-n" && /^-?\d{1,2}$/.test(args[1] ?? "") ? 3 : 1;
+    case "timeout": {
+      const at = flags(/^--(?:preserve-status|foreground)$/) - 1;
+      return /^\d{1,6}(?:\.\d{1,3})?[smhd]?$/.test(args[at] ?? "") ? at + 2 : null;
+    }
+    default:
+      return 0;
+  }
+}
+var MAX_WRAPPERS = 4;
+function unwrap(words) {
+  let rest = words;
+  const via = [];
+  for (let depth = 0; depth <= MAX_WRAPPERS; depth += 1) {
+    let next;
+    if (rest[0] === "rtk") next = unwrapRtk(rest);
+    else {
+      const taken = prefixLength(rest);
+      if (taken === null) return null;
+      next = { words: rest.slice(taken), via: rest.slice(0, taken) };
+    }
+    if (!next) return null;
+    if (!next.via.length) return { words: rest, via };
+    if (!next.words.length || next.words[0]?.startsWith("-")) return null;
+    via.push(...next.via);
+    rest = next.words;
+  }
+  return null;
+}
 var shellSyntax = /[;&|`$<>(){}\n\r\\]/;
 var unusualWhitespace = /[^\S \t]/;
 var assignment = /^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=/;
@@ -196,6 +272,7 @@ function fragmentReachesSecret(fragment) {
   if (fragment.length <= 256) return globCouldReachSecret(fragment);
   return fragment.split(/[\\/]/).some(isSecretName);
 }
+var hidesItsProgram = (words) => assignment.test(words[0] ?? "") || runsAnotherCommand(words);
 function runsAnotherCommand(words) {
   if (namesASecret(words)) return true;
   const first = words[0] ?? "";
@@ -210,7 +287,7 @@ function runsAnotherCommand(words) {
     (word) => riskyArgument.test(word) || specific?.test(word) === true
   );
 }
-function splitWords(line) {
+function splitWords(line, breaks = " 	") {
   const words = [];
   let word = "";
   let started = false;
@@ -222,7 +299,7 @@ function splitWords(line) {
     } else if (char === '"' || char === "'") {
       quote = char;
       started = true;
-    } else if (char === " " || char === "	") {
+    } else if (breaks.includes(char)) {
       if (started) words.push(word);
       word = "";
       started = false;
@@ -271,12 +348,17 @@ function splitChain(text) {
 function judgeSimple(text) {
   const compound = { operation: "command.compound", text };
   if (shellSyntax.test(text) || unusualWhitespace.test(text)) return compound;
-  const words = splitWords(text);
-  if (!words?.length) return compound;
-  if (assignment.test(words[0] ?? "") || runsAnotherCommand(words))
-    return compound;
-  return { operation: "command.run", text: render(words) };
+  const split = splitWords(text);
+  if (!split?.length || assignment.test(split[0] ?? "")) return compound;
+  const inner = unwrap(split);
+  if (!inner || hidesItsProgram(inner.words)) return compound;
+  return simpleShape(inner);
 }
+var simpleShape = ({ words, via }) => ({
+  operation: "command.run",
+  text: render(words),
+  ...via.length ? { via: render(via) } : {}
+});
 function chainParts(text) {
   const split = splitChain(text);
   if (!split || split.length < 2 || split.length > MAX_CHAIN_PARTS) return null;
@@ -293,9 +375,28 @@ function trimShellSpace(line) {
   while (end > start && isShellSpace(line[end - 1])) end -= 1;
   return line.slice(start, end);
 }
+var shellWords = (line) => splitWords(line, " 	\r\n;&|<>()`");
+function programWords(line) {
+  const text = trimShellSpace(line);
+  return (splitChain(text) ?? text.split(/[;&|\n]+/)).flatMap((part) => {
+    const words = shellWords(part) ?? part.split(/[\s'"]+/).filter(Boolean);
+    if (!words.length) return [];
+    return [unwrap(words)?.words ?? words];
+  });
+}
+var hasOption = (args, letters, long) => args.some(
+  (word) => /^-[^-]/.test(word) && letters.test(word.slice(1)) || long.some((name) => word === name || word.startsWith(`${name}=`))
+);
+function makesLink(words) {
+  const program = (words[0] ?? "").split("/").pop() ?? "";
+  if (program === "ln" || program === "link") return true;
+  return program === "cp" && hasOption(words.slice(1), /s/, ["--symbolic-link"]);
+}
 function classifyCommand(line) {
   const text = trimShellSpace(line);
   const parts = chainParts(text);
+  if (parts && programWords(text).some(makesLink))
+    return { operation: "command.compound", text };
   return parts ? { operation: "command.compound", text, parts } : judgeSimple(text);
 }
 
@@ -734,6 +835,8 @@ function commandAction(shape, original, extra) {
       command_sha256: commandSha,
       // A hidden part can't be judged by what is visible, so never split one.
       ...shape.parts && !hidden ? { parts: shape.parts } : {},
+      // Reviewers see what ran it; rules judge the command itself.
+      ...shape.via ? { via: shape.via } : {},
       ...extra
     }
   };
@@ -767,12 +870,12 @@ function fileCall({ operation, pathField, content }, input, cwd) {
   };
 }
 function globRoot(pattern) {
-  const fixed = [];
+  const fixed2 = [];
   for (const part of pattern.split(/[\\/]/)) {
     if (/[*?[\]{}]/.test(part)) break;
-    fixed.push(part);
+    fixed2.push(part);
   }
-  return fixed.join("/");
+  return fixed2.join("/");
 }
 function searchCall(input, cwd, filePattern) {
   const within2 = nonEmptyText(input.path) ?? cwd;
@@ -1023,13 +1126,16 @@ var deny = (reason) => hookAnswer("deny", reason);
 // ../policy-engine/src/receipt-block.ts
 var MAX_RECEIPT_TEXT = 8192;
 var SCAN = 16 * 1024;
-var OPENING = /(?:^|\n)(`{3,}|~{3,})[ \t]*nodrail-receipt[ \t]*\n/g;
-function lastOpening(message) {
-  const from = Math.max(0, message.length - SCAN);
+var openings = {
+  "nodrail-receipt": /(?:^|\n)(`{3,}|~{3,})[ \t]*nodrail-receipt[ \t]*\n/g,
+  "nodrail-brief": /(?:^|\n)(`{3,}|~{3,})[ \t]*nodrail-brief[ \t]*\n/g
+};
+function lastOpening(message, kind, scan) {
+  const from = Math.max(0, message.length - scan);
   const tail = message.slice(from);
   const cutMidLine = from > 0 && message[from - 1] !== "\n";
   let last;
-  for (const match of tail.matchAll(OPENING))
+  for (const match of tail.matchAll(openings[kind]))
     if (match.index > 0 || match[0].startsWith("\n") || !cutMidLine)
       last = match;
   if (!last) return null;
@@ -1040,11 +1146,14 @@ function lastOpening(message) {
     fence: last[1] ?? "```"
   };
 }
-function readReceiptBlock(message) {
-  const opening = lastOpening(message);
+function readReceiptBlock(message, max = MAX_RECEIPT_TEXT) {
+  return readLastBlock(message, "nodrail-receipt", max, SCAN);
+}
+function readLastBlock(message, kind, max, scan) {
+  const opening = lastOpening(message, kind, scan);
   if (!opening) return null;
   const text = message.slice(opening.start);
-  if (text.length > MAX_RECEIPT_TEXT) return null;
+  if (text.length > max) return null;
   const rest = message.slice(opening.after).trimEnd();
   if (!rest.endsWith(opening.fence)) return null;
   const body = rest.slice(0, rest.length - opening.fence.length);
@@ -1052,6 +1161,93 @@ function readReceiptBlock(message) {
 }
 function receiptBlock(message) {
   return readReceiptBlock(message)?.text ?? null;
+}
+
+// ../policy-engine/src/shapes/receipt-header.ts
+var SCAN2 = 16 * 1024;
+var ENTRY = /^\s*(?:[-*]\s+)?([a-z][a-z0-9_-]*):\s*(.*)$/;
+var UNKNOWN = /^\s*(?:[-*]\s+)?[^\n]*:.*$/;
+var BULLET = /^\s*[-*]\s+\S/;
+var BULLET_MARK = /^\s*[-*]\s+/;
+var FENCE = /^\s*(?:`{3,}|~{3,})/;
+var AGENT = "([A-Za-z0-9_-]{1,64})";
+var matcher = (pattern) => (line) => pattern.exec(line)?.[1] ?? null;
+var anyHeader = matcher(
+  new RegExp(
+    `^\\s*\\**\\s*[A-Z][A-Z0-9_-]*(?:[ \\t]+[A-Z][A-Z0-9_-]*)*[ \\t]+${AGENT}\\s*\\**\\s*$`
+  )
+);
+var BOLD = /^\s*\**\s*(.*?)\s*\**\s*$/;
+var TITLE_HEAD = /^[A-Z][A-Z0-9 \t_-]*$/;
+var AGENT_TEXT = /^[A-Za-z0-9_-]{1,64}$/;
+var MAX_HEADER_LINE = 128;
+function headerNaming(agent) {
+  const wanted = agentName(agent);
+  return (line) => {
+    if (line.length > MAX_HEADER_LINE) return null;
+    const inner = BOLD.exec(line)?.[1] ?? "";
+    for (let cut = inner.length - 1; cut > 0; cut -= 1) {
+      const said = inner.slice(cut);
+      if (!AGENT_TEXT.test(said)) break;
+      const head = inner.slice(0, cut);
+      if (TITLE_HEAD.test(head) && agentName(said) === wanted) return said;
+    }
+    return null;
+  };
+}
+function nextTexts(lines) {
+  const next = Array.from({ length: lines.length }, () => "");
+  let found = "";
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    next[index] = found;
+    if (lines[index].trim()) found = lines[index];
+  }
+  return next;
+}
+function consume(line, index, next, scan) {
+  if (FENCE.test(line)) return true;
+  if (!line.trim())
+    return ENTRY.test(next) || UNKNOWN.test(next) || FENCE.test(next);
+  const entry = ENTRY.exec(line);
+  if (entry) {
+    const value = entry[2].trim();
+    scan.entries.push([entry[1], value]);
+    scan.open = value ? null : scan.entries.length - 1;
+  } else if (UNKNOWN.test(line)) scan.open = null;
+  else if (scan.open !== null && BULLET.test(line)) {
+    const held = scan.entries[scan.open];
+    const item = line.replace(BULLET_MARK, "").trim();
+    held[1] = held[1] ? `${held[1]}; ${item}` : item;
+  } else return false;
+  scan.last = index;
+  return true;
+}
+function blockAt({ lines, next, match }, head, agent) {
+  const scan = { entries: [], open: null, last: head };
+  for (let index = head + 1; index < lines.length; index += 1)
+    if (!consume(lines[index], index, next[index], scan)) break;
+  for (const rest of lines.slice(scan.last + 1)) {
+    const text = rest.trim();
+    if (!text || FENCE.test(text)) continue;
+    if (match(rest) === agent) continue;
+    return null;
+  }
+  return scan.entries;
+}
+function readHeaderBlock(message, match, max = MAX_RECEIPT_TEXT) {
+  const from = Math.max(0, message.length - SCAN2);
+  const lines = message.slice(from).split("\n");
+  if (from > 0 && message[from - 1] !== "\n") lines[0] = "";
+  const view = { lines, next: nextTexts(lines), match };
+  for (let head = lines.length - 1; head >= 0; head -= 1) {
+    const agent = match(lines[head]);
+    if (agent === null) continue;
+    const entries = blockAt(view, head, agent);
+    if (!entries?.length) continue;
+    const text = lines.slice(head).join("\n").trimEnd();
+    return text.length > max ? null : { agent, text, entries };
+  }
+  return null;
 }
 
 // ../policy-engine/src/run-key.ts
@@ -1074,15 +1270,15 @@ function git(cwd, args) {
     );
   return result.status === 0 ? result.stdout.trim() : "";
 }
-function nodrailDirectory(cwd) {
+function nodrailDirectory(cwd, env = process.env) {
   const common = git(cwd, ["rev-parse", "--git-common-dir"]);
-  if (!common) return join2(homedir2(), ".nodrail");
+  if (!common) return join2(env.HOME || homedir2(), ".nodrail");
   return join2(isAbsolute2(common) ? common : resolve2(cwd, common), "nodrail");
 }
 function sessionsDirectory(cwd, env) {
   if (env.NODRAIL_LEDGER)
     return join2(resolve2(cwd, env.NODRAIL_LEDGER), "sessions");
-  return join2(nodrailDirectory(cwd), "sessions");
+  return join2(nodrailDirectory(cwd, env), "sessions");
 }
 function repositoryName(remote) {
   let text = remote.trim();
@@ -1150,13 +1346,33 @@ function runKey(cwd, sessionId, env = process.env) {
   );
 }
 
+// ../policy-engine/src/hook-runs.ts
+var HANDBACK_TOOL = "SubagentHandback";
+function receiptText(message, agent) {
+  const fenced = receiptBlock(message);
+  if (fenced !== null) return fenced;
+  return readHeaderBlock(message, headerNaming(agent))?.text ?? null;
+}
+
 // src/blocked-text.ts
 var why = {
   gate: " A gate in your rules holds it until the steps it waits for, such as QA or review, have finished with an accepted verdict after the last change. Run those steps, then try again.",
   budget: " A budget in your rules for this run or step is used up.",
   agent_paused: " This agent is paused in Nodrail."
 };
+var fixed = {
+  NOT_CONFIGURED: "Nodrail: not configured, so this action is blocked. Set NODRAIL_CREDENTIAL or save it to ~/.nodrail/credential.",
+  INSECURE_URL: "Nodrail: its address must use https (plain http only for this machine), so the credential isn't sent and this action is blocked.",
+  UNAUTHENTICATED: "Nodrail: the credential was refused, so this action is blocked.",
+  QUOTA_EXCEEDED: "Nodrail: this workspace has used its agent actions for the month, so this action is blocked.",
+  RATE_LIMITED: "Nodrail: too many calls in a short time, so this action is blocked. Try again in a minute.",
+  CONTRACT_REFUSED: "Nodrail: this call doesn't follow its declared contract, so it is blocked."
+};
 function blockedText(decision) {
+  if (decision.code === "CONTRACT_REFUSED" && decision.reason)
+    return decision.reason;
+  const constant = fixed[decision.code];
+  if (constant) return constant;
   const reference = decision.reference ? ` Request ${decision.reference}.` : "";
   const because = (decision.reason && why[decision.reason]) ?? "";
   switch (decision.code) {
@@ -1169,16 +1385,6 @@ function blockedText(decision) {
       return `Nodrail: the request expired before anyone decided.${reference}`;
     case "INVALIDATED":
       return `Nodrail: the request was closed because something changed.${reference} Try again to ask for a new decision.`;
-    case "NOT_CONFIGURED":
-      return "Nodrail: not configured, so this action is blocked. Set NODRAIL_CREDENTIAL or save it to ~/.nodrail/credential.";
-    case "INSECURE_URL":
-      return "Nodrail: its address must use https (plain http only for this machine), so the credential isn't sent and this action is blocked.";
-    case "UNAUTHENTICATED":
-      return "Nodrail: the credential was refused, so this action is blocked.";
-    case "QUOTA_EXCEEDED":
-      return "Nodrail: this workspace has used its agent actions for the month, so this action is blocked.";
-    case "RATE_LIMITED":
-      return "Nodrail: too many calls in a short time, so this action is blocked. Try again in a minute.";
     default:
       return `Nodrail: could not confirm this action is allowed (${decision.code}), so it is blocked.`;
   }
@@ -1215,23 +1421,270 @@ function waitMsFrom(env) {
 var localReadTools = ["Read", "Glob", "Grep"];
 var localReadMatcher = `^(${localReadTools.join("|")})$`;
 
-// src/index.ts
-import { randomBytes } from "node:crypto";
+// ../policy-engine/src/revision.ts
+import { spawnSync as spawnSync2 } from "node:child_process";
+import { createHash as createHash3 } from "node:crypto";
+var TOTAL_MS = 5e3;
+var MAX_OUTPUT = 32 * 1024 * 1024;
+var MAX_UNTRACKED = 2e3;
+function reader(cwd) {
+  const deadline = Date.now() + TOTAL_MS;
+  return (args, input) => {
+    const left = deadline - Date.now();
+    if (left <= 0) return null;
+    const result = spawnSync2("git", args, {
+      cwd,
+      encoding: "buffer",
+      timeout: left,
+      maxBuffer: MAX_OUTPUT,
+      // A Buffer: Node encodes string input with `encoding`, and "buffer"
+      // isn't one, so a string here would make every untracked file unknown.
+      ...input === void 0 ? {} : { input: Buffer.from(input, "utf8") }
+    });
+    if (result.error || result.status !== 0) return null;
+    return result.stdout;
+  };
+}
+function untracked(git2) {
+  const others = git2(["ls-files", "--others", "--exclude-standard", "-z"]);
+  if (!others) return null;
+  const names = others.toString("utf8").split("\0").filter(Boolean);
+  if (names.length > MAX_UNTRACKED || names.some((name) => name.includes("\n")))
+    return null;
+  if (!names.length) return [others];
+  const contents = git2(
+    ["hash-object", "--stdin-paths", "--no-filters"],
+    `${names.join("\n")}
+`
+  );
+  return contents ? [others, contents] : null;
+}
+function workRevision(cwd) {
+  const top = reader(cwd)(["rev-parse", "--show-toplevel"]);
+  const root = top?.toString("utf8").replace(/\n$/, "");
+  if (!root) return null;
+  const git2 = reader(root);
+  const head = git2(["rev-parse", "--verify", "HEAD"]);
+  const diff = head && git2(["diff", "HEAD", "--binary", "--no-ext-diff", "--no-color"]);
+  const others = diff && untracked(git2);
+  if (!head || !diff || !others) return null;
+  return digestOf([head, diff, ...others]);
+}
+function digestOf(parts) {
+  const hash = createHash3("sha256");
+  for (const part of parts) hash.update(`${part.length}
+`).update(part);
+  return `sha256:${hash.digest("hex")}`;
+}
+
+// src/subject.ts
+var REVISION = /^sha256:[0-9a-f]{64}$/;
+function readSubject(reader2) {
+  if (!reader2) return null;
+  try {
+    const read = reader2();
+    return typeof read === "string" && REVISION.test(read) ? read : null;
+  } catch {
+    return null;
+  }
+}
+var revisionAt = (cwd) => () => workRevision(cwd);
+var MAX_MEASURED = 20;
+var RESULT_PATH = /^result(?:\.[a-z][a-z0-9_]{0,62}){1,6}$/;
+function checkMeasured(measured) {
+  if (measured.length > MAX_MEASURED) return null;
+  const seen = /* @__PURE__ */ new Set();
+  const checked = [];
+  for (const item of measured) {
+    if (typeof item !== "object" || item === null) return null;
+    const { path, value } = item;
+    if (typeof path !== "string" || !RESULT_PATH.test(path)) return null;
+    if (seen.has(path)) return null;
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)
+      return null;
+    seen.add(path);
+    checked.push({ path, value });
+  }
+  return checked;
+}
+
+// src/hook-contracts.ts
+import { existsSync, readFileSync as readFileSync3 } from "node:fs";
+import { dirname as dirname2, join as join4, resolve as resolve3 } from "node:path";
+var CONTRACTS_FILE = ".nodrail/contracts.json";
+var MAX_BYTES = 1024 * 1024;
+var MAX_DEPTH2 = 32;
+var loadChecker = () => {
+  const specifier = import.meta.url.endsWith(".ts") ? "./contract-fields.ts" : "./nodrail-hook-contracts.mjs";
+  return import(specifier);
+};
+function findContractsFile(cwd, env) {
+  const project = env.CLAUDE_PROJECT_DIR?.trim();
+  if (project) {
+    const file = join4(resolve3(project), CONTRACTS_FILE);
+    return existsSync(file) ? file : null;
+  }
+  let folder = resolve3(cwd);
+  for (let depth = 0; depth < MAX_DEPTH2; depth += 1) {
+    const file = join4(folder, CONTRACTS_FILE);
+    if (existsSync(file)) return file;
+    const parent = dirname2(folder);
+    if (parent === folder) return null;
+    folder = parent;
+  }
+  return null;
+}
+var isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+function readContracts(file) {
+  let raw;
+  try {
+    const text = readFileSync3(file, "utf8");
+    if (Buffer.byteLength(text) > MAX_BYTES) return "it is too large";
+    raw = JSON.parse(text);
+  } catch (error) {
+    return error.message;
+  }
+  if (!isRecord(raw) || raw.version !== 1) return "it isn't version 1";
+  const { briefs, inputs } = raw;
+  if (briefs !== void 0 && !isRecord(briefs) || inputs !== void 0 && !isRecord(inputs))
+    return "its briefs or inputs aren't objects";
+  return {
+    ...briefs ? { briefs } : {},
+    ...inputs ? { inputs } : {}
+  };
+}
+function covers(contracts, action) {
+  const starts = (action.tool === "claude-code" || action.tool === "codex") && action.operation === "agent" && action.resource.kind === "agent";
+  if (starts && Object.hasOwn(contracts.briefs ?? {}, action.resource.id))
+    return true;
+  return Object.hasOwn(
+    contracts.inputs ?? {},
+    `${action.tool}.${action.operation}`
+  );
+}
+var refused = (why2) => ({
+  refusal: `Nodrail: ${why2}, so this action is blocked.`
+});
+async function hookContractFields(action, input, where, load = loadChecker) {
+  const file = findContractsFile(where.cwd, where.env);
+  if (!file) return { action };
+  const contracts = readContracts(file);
+  if (typeof contracts === "string")
+    return refused(
+      `${CONTRACTS_FILE} can't be read (${contracts}); run nodrail apply`
+    );
+  if (!covers(contracts, action)) return { action };
+  let checker;
+  try {
+    checker = await load();
+  } catch {
+    return refused(
+      "this call has a declared contract and the hook couldn't load its checker"
+    );
+  }
+  return checker.withContractFields(action, input, contracts);
+}
+
+// src/errors.ts
 var Blocked = class extends Error {
-  constructor(code, reference = null, reason = null) {
+  constructor(code, reference = null, reason = null, status = null) {
     super(code);
     this.code = code;
     this.reference = reference;
     this.reason = reason;
+    this.status = status;
   }
   code;
   reference;
   reason;
+  status;
 };
-var isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var transient = (error) => error instanceof Blocked && (error.code === "UNAVAILABLE" || error.code === "RATE_LIMITED" || error.status !== null && error.status >= 500);
+var alreadyIn = (error) => error instanceof Blocked && (error.status === 409 || error.code === "IDEMPOTENCY_CONFLICT");
+var refusedNewFields = (error) => error instanceof Blocked && error.code === "INVALID_INPUT";
+var REPORT_RETRY_MS = [200, 800];
+var defaultSleep = (ms) => new Promise((resolve5) => setTimeout(resolve5, ms));
+
+// src/authorize.ts
+function assertSameCall(status, descriptor) {
+  const digest = descriptorDigest(status.installation_id, descriptor);
+  if (status.descriptor_digest !== digest || status.action_digest !== actionDigest(status.action_id, digest))
+    throw new Blocked("DIGEST_MISMATCH", status.reference);
+}
+var waiting = /* @__PURE__ */ new Set(["APPROVAL_PENDING", "UNKNOWN_PERMISSION_BLOCKED"]);
+var WITHDRAW_TIMEOUT_MS = 3e3;
+async function withdrawQuietly(client, actionId) {
+  try {
+    await client.withdraw(actionId, { timeoutMs: WITHDRAW_TIMEOUT_MS });
+  } catch {
+  }
+}
+async function pause(ms, sleep, signal) {
+  const slept = (sleep ?? defaultSleep)(ms);
+  if (!signal) return slept;
+  let stop = () => {
+  };
+  const stopped = new Promise((done) => {
+    stop = done;
+    if (signal.aborted) done();
+    else signal.addEventListener("abort", stop, { once: true });
+  });
+  try {
+    await Promise.race([slept, stopped]);
+  } finally {
+    signal.removeEventListener("abort", stop);
+  }
+}
+async function waitForPerson(client, descriptor, submitted, { waitMs = 0, pollMs = 2e3, sleep, signal }) {
+  let status = submitted;
+  const deadline = Date.now() + waitMs;
+  while (waiting.has(status.code)) {
+    if (Date.now() >= deadline || signal?.aborted) {
+      if (waitMs > 0) await withdrawQuietly(client, status.action_id);
+      throw new Blocked(status.code, status.reference, status.reason);
+    }
+    await pause(pollMs, sleep, signal);
+    if (signal?.aborted) continue;
+    status = await client.status(status.action_id);
+    assertSameCall(status, descriptor);
+  }
+  return status;
+}
+async function resolve4(client, descriptor, key, options) {
+  if (!isPlainJson(descriptor.params)) throw new Blocked("INVALID_ACTION");
+  const { run, subject } = options;
+  const read = () => run && subject !== void 0 ? readSubject(subject) : void 0;
+  const submitted = await client.submit(descriptor, key, run, read());
+  assertSameCall(submitted, descriptor);
+  const status = await waitForPerson(client, descriptor, submitted, options);
+  if (status.code !== "READY")
+    throw new Blocked(status.code, status.reference, status.reason);
+  const permit = await client.permit(status, read());
+  return {
+    allowed: true,
+    actionId: permit.action_id,
+    permitId: permit.permit_id
+  };
+}
+async function authorize(client, descriptor, key, options = {}) {
+  try {
+    return await resolve4(client, descriptor, key, options);
+  } catch (error) {
+    return error instanceof Blocked ? {
+      allowed: false,
+      code: error.code,
+      reason: error.reason,
+      reference: error.reference
+    } : { allowed: false, code: "CLIENT_ERROR", reason: null, reference: null };
+  }
+}
+
+// src/client.ts
+import { randomBytes } from "node:crypto";
+var isRecord2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 var stringFields = (value, names) => names.every((name) => typeof value[name] === "string");
 function asStatus(body) {
-  if (!isRecord(body) || !stringFields(body, [
+  if (!isRecord2(body) || !stringFields(body, [
     "code",
     "action_id",
     "installation_id",
@@ -1287,26 +1740,45 @@ var NodrailClient = class {
     }
     const body = await response.json().catch(() => null);
     if (response.ok) return body;
-    const error = isRecord(body) && isRecord(body.error) ? body.error.code : null;
-    throw new Blocked(typeof error === "string" ? error : "UNAVAILABLE");
+    const error = isRecord2(body) && isRecord2(body.error) ? body.error.code : null;
+    throw new Blocked(
+      typeof error === "string" ? error : "UNAVAILABLE",
+      null,
+      null,
+      response.status
+    );
   }
   heartbeat() {
     return this.request("/heartbeat", {
       body: { adapter_version: this.options.adapterVersion }
     });
   }
-  /** The run is context for the decision; it is not part of the digest. */
-  async submit(descriptor, idempotencyKey, run) {
-    return asStatus(
-      await this.request("/actions", {
-        body: {
-          ...descriptor,
-          ...run ? { run } : {},
-          adapter_version: this.options.adapterVersion
-        },
-        headers: { "idempotency-key": idempotencyKey }
-      })
-    );
+  /**
+   * The run is context for the decision; it is not part of the digest. With
+   * a run, `subject` is the work revision it is at (null: unknown), which a
+   * gate on the revision checks evidence against.
+   */
+  async submit(descriptor, idempotencyKey, run, subject) {
+    const send = (withSubject2) => this.request("/actions", {
+      body: {
+        ...descriptor,
+        ...run ? { run: withSubject2 ? { ...run, subject: subject ?? null } : run } : {},
+        adapter_version: this.options.adapterVersion
+      },
+      headers: { "idempotency-key": idempotencyKey }
+    });
+    const withSubject = run !== void 0 && subject !== void 0;
+    return asStatus(await this.compatible(send, withSubject));
+  }
+  /** Sends with the Wave 3 fields, and once without them to a server that refuses them. */
+  async compatible(send, withNew) {
+    if (!withNew) return send(false);
+    try {
+      return await send(true);
+    } catch (error) {
+      if (!refusedNewFields(error)) throw error;
+      return send(false);
+    }
   }
   /** A step of a run starting or finishing. Grants nothing by itself. */
   step(event) {
@@ -1322,18 +1794,29 @@ var NodrailClient = class {
       )
     );
   }
-  /** Verifies the answer is fresh and exactly for this call before trusting it. */
-  async permit(action) {
+  /**
+   * Verifies the answer is fresh and exactly for this call before trusting
+   * it. `subject`: the work revision at permit time (null: unknown), sent
+   * again because the work may have changed while a person decided.
+   */
+  async permit(action, subject) {
     const nonce = randomBytes(24).toString("hex");
     const startedAt = Date.now();
-    const body = await this.request(`/actions/${action.action_id}/permit`, {
-      body: { action_digest: action.action_digest, nonce }
-    });
-    if (!isRecord(body) || body.code !== "ALLOW")
+    const body = await this.compatible(
+      (withSubject) => this.request(`/actions/${action.action_id}/permit`, {
+        body: {
+          action_digest: action.action_digest,
+          nonce,
+          ...withSubject ? { subject: subject ?? null } : {}
+        }
+      }),
+      subject !== void 0
+    );
+    if (!isRecord2(body) || body.code !== "ALLOW")
       throw new Blocked(
-        isRecord(body) && typeof body.code === "string" ? body.code : "INVALID_RESPONSE",
+        isRecord2(body) && typeof body.code === "string" ? body.code : "INVALID_RESPONSE",
         action.reference,
-        isRecord(body) && typeof body.reason === "string" ? body.reason : null
+        isRecord2(body) && typeof body.reason === "string" ? body.reason : null
       );
     if (!stringFields(body, ["permit_id", "issued_at", "expires_at"]) || body.action_id !== action.action_id || body.action_digest !== action.action_digest || body.installation_id !== action.installation_id || body.claim_nonce !== nonce)
       throw new Blocked("PERMIT_MISMATCH", action.reference);
@@ -1354,91 +1837,44 @@ var NodrailClient = class {
       })
     );
   }
-  report(actionId, report) {
-    return this.request(`/actions/${actionId}/reports`, {
+  /**
+   * What happened to an action. `key` makes it idempotent: a transient
+   * failure is sent again with the same key a bounded number of times, and
+   * a key the server already has means the report is in. `measured`: the
+   * amounts the result measured, for budgets that sum them; refused whole
+   * when any is unusable (see checkMeasured).
+   */
+  async report(actionId, report, options = {}) {
+    const measured = report.measured === void 0 ? void 0 : checkMeasured(report.measured);
+    if (measured === null)
+      throw new TypeError(
+        "Nodrail: measured takes result. paths with whole, non-negative amounts, each path once."
+      );
+    const send = (withMeasured) => this.request(`/actions/${actionId}/reports`, {
       body: {
         report_key: report.key,
         outcome: report.outcome,
         ...report.permitId ? { permit_id: report.permitId } : {},
-        ...report.details ? { details: report.details } : {}
+        ...report.details ? { details: report.details } : {},
+        ...withMeasured && measured ? { measured } : {}
       }
     });
+    const sleep = options.sleep ?? defaultSleep;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await this.compatible(send, Boolean(measured?.length));
+      } catch (error) {
+        if (alreadyIn(error)) return { recorded: true };
+        const pause2 = REPORT_RETRY_MS[attempt];
+        if (!transient(error) || pause2 === void 0) throw error;
+        await sleep(pause2);
+      }
+    }
   }
 };
-var defaultSleep = (ms) => new Promise((resolve4) => setTimeout(resolve4, ms));
-function assertSameCall(status, descriptor) {
-  const digest = descriptorDigest(status.installation_id, descriptor);
-  if (status.descriptor_digest !== digest || status.action_digest !== actionDigest(status.action_id, digest))
-    throw new Blocked("DIGEST_MISMATCH", status.reference);
-}
-var waiting = /* @__PURE__ */ new Set(["APPROVAL_PENDING", "UNKNOWN_PERMISSION_BLOCKED"]);
-var WITHDRAW_TIMEOUT_MS = 3e3;
-async function withdrawQuietly(client, actionId) {
-  try {
-    await client.withdraw(actionId, { timeoutMs: WITHDRAW_TIMEOUT_MS });
-  } catch {
-  }
-}
-async function pause(ms, sleep, signal) {
-  const slept = (sleep ?? defaultSleep)(ms);
-  if (!signal) return slept;
-  let stop = () => {
-  };
-  const stopped = new Promise((done) => {
-    stop = done;
-    if (signal.aborted) done();
-    else signal.addEventListener("abort", stop, { once: true });
-  });
-  try {
-    await Promise.race([slept, stopped]);
-  } finally {
-    signal.removeEventListener("abort", stop);
-  }
-}
-async function waitForPerson(client, descriptor, submitted, { waitMs = 0, pollMs = 2e3, sleep, signal }) {
-  let status = submitted;
-  const deadline = Date.now() + waitMs;
-  while (waiting.has(status.code)) {
-    if (Date.now() >= deadline || signal?.aborted) {
-      if (waitMs > 0) await withdrawQuietly(client, status.action_id);
-      throw new Blocked(status.code, status.reference, status.reason);
-    }
-    await pause(pollMs, sleep, signal);
-    if (signal?.aborted) continue;
-    status = await client.status(status.action_id);
-    assertSameCall(status, descriptor);
-  }
-  return status;
-}
-async function resolve3(client, descriptor, key, options) {
-  if (!isPlainJson(descriptor.params)) throw new Blocked("INVALID_ACTION");
-  const submitted = await client.submit(descriptor, key, options.run);
-  assertSameCall(submitted, descriptor);
-  const status = await waitForPerson(client, descriptor, submitted, options);
-  if (status.code !== "READY")
-    throw new Blocked(status.code, status.reference, status.reason);
-  const permit = await client.permit(status);
-  return {
-    allowed: true,
-    actionId: permit.action_id,
-    permitId: permit.permit_id
-  };
-}
-async function authorize(client, descriptor, key, options = {}) {
-  try {
-    return await resolve3(client, descriptor, key, options);
-  } catch (error) {
-    return error instanceof Blocked ? {
-      allowed: false,
-      code: error.code,
-      reason: error.reason,
-      reference: error.reference
-    } : { allowed: false, code: "CLIENT_ERROR", reason: null, reference: null };
-  }
-}
 
 // src/hooks.ts
-var HOOK_VERSION = "0.5.2";
+var HOOK_VERSION = "0.6.0";
 var HOOK_DEADLINE_MS = 345e3;
 function clientFrom(env, deps) {
   const { url, credential } = resolveConnection(env);
@@ -1542,12 +1978,19 @@ async function beforeTool(event, env, deps) {
       `Nodrail: ${error.message} So this action is blocked.`
     );
   }
+  const fields = await hookContractFields(descriptor, input, {
+    cwd: nonEmptyText(event.cwd) ?? process.cwd(),
+    env
+  });
+  if ("refusal" in fields) return deny(fields.refusal);
   const decision = await decideInTime(
-    (signal) => authorize(client, descriptor, key, {
+    (signal) => authorize(client, fields.action, key, {
       waitMs: waitMsFrom(env),
       sleep: deps.sleep,
       run,
-      signal
+      signal,
+      // The work the agent's session is in, as the runtime reads it.
+      subject: revisionAt(nonEmptyText(event.cwd) ?? process.cwd())
     }),
     deps.deadlineMs ?? HOOK_DEADLINE_MS
   );
@@ -1565,11 +2008,12 @@ async function afterTool(event, env, deps) {
   const key = nonEmptyText(event.tool_use_id);
   if (!client || !key) return allowQuietly;
   const failed = toolFailed(event);
+  const interrupted = event.hook_event_name === "PostToolUseFailure" && event.is_interrupt === true;
   try {
     const action = await client.findByKey(key);
     await client.report(action.action_id, {
       key,
-      outcome: failed ? "failure" : "success",
+      outcome: interrupted ? "unknown" : failed ? "failure" : "success",
       permitId: action.permit_id,
       details: {
         ...typeof event.duration_ms === "number" ? { duration_ms: event.duration_ms } : {},
@@ -1592,8 +2036,8 @@ async function onStep(event, env, deps) {
   if (!client || !run || !step) return allowQuietly;
   const body = { run: { key: run.key }, step, event: "started" };
   if (event.hook_event_name === "SubagentStop") {
-    const block = receiptBlock(nonEmptyText(event.last_assistant_message) ?? "");
     body.event = "finished";
+    const block = receiptOf(nonEmptyText(event.last_assistant_message), step.agent);
     if (block) body.receipt = { text: block };
   }
   try {
@@ -1601,6 +2045,52 @@ async function onStep(event, env, deps) {
   } catch {
   }
   return allowQuietly;
+}
+var receiptOf = (message, agent) => receiptText(message ?? "", agent);
+function refusedReceipt(answer) {
+  if (typeof answer !== "object" || answer === null) return null;
+  const { receipt } = answer;
+  if (typeof receipt !== "object" || receipt === null) return null;
+  const { state, reason } = receipt;
+  if (state !== "invalid" && state !== "missing") return null;
+  return typeof reason === "string" && reason ? reason.slice(0, 500) : state;
+}
+async function onHandback(event, env, deps) {
+  const started = Date.now();
+  const client = clientFrom(env, deps);
+  let run;
+  try {
+    run = runOf(event, env);
+  } catch {
+    run = void 0;
+  }
+  const step = run?.step;
+  if (client && run && step) {
+    const input = event.tool_input;
+    const message = typeof input?.message === "string" ? input.message : "";
+    const block = receiptOf(message, step.agent);
+    const body = {
+      run: { key: run.key },
+      step,
+      event: "finished",
+      ...block ? { receipt: { text: block } } : {}
+    };
+    let answer = null;
+    try {
+      answer = await client.step(body);
+    } catch {
+    }
+    const refused2 = refusedReceipt(answer);
+    if (refused2)
+      return deny(
+        `Nodrail: your receipt can't be accepted: ${refused2}. Hand back again with the same report, ending with a receipt that follows your contract.`
+      );
+  }
+  const deadlineMs = (deps.deadlineMs ?? HOOK_DEADLINE_MS) - (Date.now() - started);
+  return beforeTool(event, env, {
+    ...deps,
+    deadlineMs: Math.max(0, deadlineMs)
+  });
 }
 var notice = (message) => ({
   stdout: `${JSON.stringify({ systemMessage: message })}
@@ -1635,7 +2125,7 @@ async function runHook(stdin, env, deps = {}) {
   }
   switch (event.hook_event_name) {
     case "PreToolUse":
-      return beforeTool(event, env, deps);
+      return event.tool_name === HANDBACK_TOOL && nonEmptyText(event.agent_id) ? onHandback(event, env, deps) : beforeTool(event, env, deps);
     case "PostToolUse":
     case "PostToolUseFailure":
       return afterTool(event, env, deps);
@@ -1652,19 +2142,31 @@ async function runHook(stdin, env, deps = {}) {
 }
 
 // src/hook-main.ts
+var failure = 2;
+var fail = () => {
+  process.stderr.write(
+    failure ? "Nodrail: the hook failed, so this action is blocked.\n" : "Nodrail: the hook failed; nothing was recorded.\n"
+  );
+  process.exit(failure);
+};
+process.on("uncaughtException", fail);
+process.on("unhandledRejection", fail);
+function isToolCall(stdin) {
+  try {
+    return JSON.parse(stdin).hook_event_name === "PreToolUse";
+  } catch {
+    return true;
+  }
+}
 async function main() {
   const agent = process.argv[2] === "codex" ? "codex" : "claude-code";
   let stdin = "";
   for await (const chunk of process.stdin) stdin += String(chunk);
+  if (!isToolCall(stdin)) failure = 0;
   const result = await runHook(stdin, process.env, { agent });
   if (result.stderr) process.stderr.write(result.stderr);
   if (result.stdout)
     process.stdout.write(result.stdout, () => process.exit(result.exitCode));
   else process.exit(result.exitCode);
 }
-main().catch(() => {
-  process.stderr.write(
-    "Nodrail: the hook failed, so this action is blocked.\n"
-  );
-  process.exit(2);
-});
+main().catch(fail);
