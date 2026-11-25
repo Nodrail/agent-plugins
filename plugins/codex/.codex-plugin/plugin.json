@@ -1,7 +1,7 @@
 {
   "name": "nodrail",
-  "version": "0.6.0",
-  "description": "Check supported Codex tool calls against workspace policies with the Nodrail Cloud plugin.",
+  "version": "0.8.0",
+  "description": "Allow or deny supported Codex tool calls with the policy in your Nodrail control plane, self-hosted or Nodrail Cloud.",
   "homepage": "https://nodrail.com",
   "license": "Apache-2.0",
   "author": {
@@ -11,7 +11,7 @@
   "hooks": "./hooks/hooks.json",
   "interface": {
     "displayName": "Nodrail",
-    "shortDescription": "Cloud permissions for supported Codex tools",
+    "shortDescription": "Allow or deny supported Codex tools",
     "category": "Productivity",
     "capabilities": [
       "Hooks"

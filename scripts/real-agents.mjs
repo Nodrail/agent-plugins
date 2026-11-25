@@ -74,7 +74,6 @@ try {
     const env = {
       ...process.env,
       CLAUDE_CONFIG_DIR: join(work, "claude"),
-      NODRAIL_WAIT_SECONDS: "0",
     };
     run("claude", ["plugin", "marketplace", "add", root, "--scope", "local"], {
       env,
@@ -123,7 +122,6 @@ try {
       CODEX_HOME: home,
       NODRAIL_URL: url,
       NODRAIL_HOME: nodrailHome,
-      NODRAIL_WAIT_SECONDS: "0",
     };
     run("codex", ["login", "--with-api-key"], {
       env,

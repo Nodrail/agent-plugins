@@ -23,7 +23,7 @@
             "args": [
               "${CLAUDE_PLUGIN_ROOT}/hooks/nodrail-hook.mjs"
             ],
-            "timeout": 360,
+            "timeout": 30,
             "onFailure": "block"
           }
         ]
