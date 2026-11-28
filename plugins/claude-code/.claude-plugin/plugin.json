@@ -1,6 +1,6 @@
 {
   "name": "nodrail",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "description": "Allow or deny covered Claude Code tool calls with the policy in your Nodrail control plane, self-hosted or Nodrail Cloud.",
   "author": {
     "name": "Nodrail",

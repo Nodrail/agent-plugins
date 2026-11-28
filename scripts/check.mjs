@@ -21,12 +21,15 @@ expect(
   "the two plugins have different versions",
 );
 // The hook comes from @nodrail/client, and the plugins carry its version.
-const hookVersion = /HOOK_VERSION = "([^"]+)"/.exec(
-  readFileSync(
-    resolve(root, "plugins/claude-code/hooks/nodrail-hook.mjs"),
-    "utf8",
-  ),
-)?.[1];
+// The client reads it from its package.json, which esbuild inlines just
+// before src/version.ts; if the bundle's shape changes, this fails loudly.
+const hookVersion =
+  /\/\/ package\.json\r?\nvar version = "([^"]+)";\r?\n\r?\n\/\/ src\/version\.ts\r?\nvar PACKAGE_VERSION = version;/.exec(
+    readFileSync(
+      resolve(root, "plugins/claude-code/hooks/nodrail-hook.mjs"),
+      "utf8",
+    ),
+  )?.[1];
 expect(
   hookVersion === claude.version,
   `the plugins say ${claude.version}, but their hook is ${hookVersion ?? "unversioned"}`,

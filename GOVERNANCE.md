@@ -24,16 +24,8 @@ regular contributors becoming maintainers; open an issue to talk about it.
 
 ## Where the code comes from, and how your change ships
 
-These repositories, including the control-plane server and console, are
-generated from Nodrail's private monorepo and licensed under Apache-2.0.
-Here is what happens to a pull request:
-
-1. A maintainer reviews it here, in the open, like any pull request.
-2. When it's accepted, the maintainer applies it to the monorepo, with you as
-   co-author, and runs the full checks there.
-3. The next sync brings it back here as a commit that credits you with
-   `Co-authored-by`, so it shows on your GitHub profile.
-4. Your pull request is closed with a link to that commit, rather than merged.
-
-Your change keeps your name all the way through, and it appears in the
-changelog of the release that ships it.
+Open issues and pull requests in [Nodrail/nodrail](https://github.com/Nodrail/nodrail).
+Accepted contributions are credited when maintainers integrate them, and
+user-facing changes appear in the relevant changelog. The
+[plugin marketplace](https://github.com/Nodrail/agent-plugins) is generated
+from the source in the monorepo.

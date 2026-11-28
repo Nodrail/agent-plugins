@@ -987,6 +987,12 @@ function deny(reason) {
   };
 }
 
+// package.json
+var version = "0.9.2";
+
+// src/version.ts
+var PACKAGE_VERSION = version;
+
 // ../policy-engine/src/receipt-block.ts
 var openings = {
   "nodrail-receipt": /(?:^|\n)(`{3,}|~{3,})[ \t]*nodrail-receipt[ \t]*\n/g,
@@ -1026,7 +1032,18 @@ function receiptBlock(message) {
 }
 
 // ../policy-engine/src/shapes/receipt-header.ts
-var SCAN = 16 * 1024, ENTRY = /^\s*(?:[-*]\s+)?([a-z][a-z0-9_-]*):\s*(.*)$/, UNKNOWN = /^\s*(?:[-*]\s+)?[^\n]*:.*$/, BULLET = /^\s*[-*]\s+\S/, BULLET_MARK = /^\s*[-*]\s+/, FENCE = /^\s*(?:`{3,}|~{3,})/;
+var SCAN = 16 * 1024, ENTRY = /^([a-z][a-z0-9_-]*):/, LINE_BREAK = /[\r\n\u2028\u2029]/;
+function readEntry(line) {
+  let content = line.trimStart().replace(BULLET_MARK, ""), head = ENTRY.exec(content);
+  if (!head) return null;
+  let value = content.slice(head[0].length).trimStart();
+  return LINE_BREAK.test(value) ? null : [head[1], value.trimEnd()];
+}
+function hasColon(line) {
+  let colon = line.lastIndexOf(":");
+  return colon !== -1 && !LINE_BREAK.test(line.slice(colon + 1));
+}
+var BULLET = /^\s*[-*]\s+\S/, BULLET_MARK = /^\s*[-*]\s+/, FENCE = /^\s*(?:`{3,}|~{3,})/;
 var AGENT = "([A-Za-z0-9_-]{1,64})", matcher = (pattern) => (line) => pattern.exec(line)?.[1] ?? null;
 var anyHeader = matcher(
   new RegExp(
@@ -1056,12 +1073,11 @@ function nextTexts(lines) {
 function consume(line, index, next, scan) {
   if (FENCE.test(line)) return !0;
   if (!line.trim())
-    return ENTRY.test(next) || UNKNOWN.test(next) || FENCE.test(next);
-  let entry = ENTRY.exec(line);
-  if (entry) {
-    let value = entry[2].trim();
-    scan.entries.push([entry[1], value]), scan.open = value ? null : scan.entries.length - 1;
-  } else if (UNKNOWN.test(line)) scan.open = null;
+    return readEntry(next) !== null || hasColon(next) || FENCE.test(next);
+  let entry = readEntry(line);
+  if (entry)
+    scan.entries.push(entry), scan.open = entry[1] ? null : scan.entries.length - 1;
+  else if (hasColon(line)) scan.open = null;
   else if (scan.open !== null && BULLET.test(line)) {
     let held = scan.entries[scan.open], item = line.replace(BULLET_MARK, "").trim();
     held[1] = held[1] ? `${held[1]}; ${item}` : item;
@@ -1771,7 +1787,7 @@ var NodrailClient = class {
 };
 
 // src/hooks.ts
-var HOOK_VERSION = "0.9.1", HOOK_DEADLINE_MS = 25e3;
+var HOOK_VERSION = PACKAGE_VERSION, HOOK_DEADLINE_MS = 25e3;
 function clientFrom(env, deps) {
   let { url, credential } = resolveConnection(env);
   return credential ? new NodrailClient({

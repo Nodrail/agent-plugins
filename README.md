@@ -1,5 +1,9 @@
 # Nodrail plugins for Claude Code and Codex
 
+The [marketplace](https://github.com/Nodrail/agent-plugins) is generated from
+[Nodrail/nodrail](https://github.com/Nodrail/nodrail). Open issues and pull
+requests in [the Nodrail monorepo](https://github.com/Nodrail/nodrail/issues).
+
 Check supported tool calls against the policy in your Nodrail control plane, self-hosted or Nodrail Cloud, before they run. Each call is allowed or denied at once, with the reason; nothing waits for a person. Your team keeps the agent runtime and provider credentials.
 
 These plugins use a Nodrail workspace credential and send each call to the control plane through its host API. To set up hosts from a repository instead, with the policy decided on the machine, declare them in `nodrail.yaml` and run `nodrail plan` and `nodrail apply` ([`@nodrail/cli`](https://www.npmjs.com/package/@nodrail/cli)). The project workflow supports Claude Code, Codex and GitHub Copilot CLI. For an existing plugin setup, follow the [upgrade to a repository connection](https://nodrail.com/docs/cli#upgrade-to-connect).
@@ -75,7 +79,7 @@ allows it, each start is denied.
 For a subagent to report a verdict, end its definition (for example
 `.claude/agents/qa.md`) with an instruction to finish its final message with a
 `nodrail-receipt` block, such as `verdict: pass`, and nothing after it. See
-[Runs, gates and budgets (preview)](https://github.com/Nodrail/nodrail-js/blob/main/packages/policy-engine/docs/runs.md#receipts).
+[Runs, gates and budgets (preview)](https://github.com/Nodrail/nodrail/blob/main/packages/policy-engine/docs/runs.md#receipts).
 
 A patch that touches several files, or renames one, is its own operation (tool
 `files`, operation `file.patch`), so a rule for one folder can't let a second
@@ -121,12 +125,13 @@ person.
 ## How it's built
 
 Both plugins run the same file, `hooks/nodrail-hook.mjs`: the hook from
-[`@nodrail/client`](https://github.com/Nodrail/nodrail-js/tree/main/packages/client),
+[`@nodrail/client`](https://github.com/Nodrail/nodrail/tree/main/packages/client),
 bundled into one file with no dependencies so nothing else needs installing. Its
 source, tests and changelog live there. `node scripts/check.mjs` checks that the
 manifests agree and that the hook blocks when it isn't configured.
 
-Versions are tagged here as `v<version>`, with a GitHub release for each.
+Plugin versions follow the client. See the
+[Nodrail releases](https://github.com/Nodrail/nodrail/releases).
 
 Two checks run in CI. One proves the hook is byte for byte the one in
 `@nodrail/client` of the same version on npm. The other, run on demand once
@@ -137,10 +142,8 @@ one doesn't, and `.env` stays hidden.
 
 ## Contributing and security
 
-Changes to the hook itself go to
-[Nodrail/nodrail-js](https://github.com/Nodrail/nodrail-js). For the plugin
-manifests and this README, see [CONTRIBUTING.md](https://github.com/Nodrail/agent-plugins/blob/main/CONTRIBUTING.md). Please report
-vulnerabilities privately, as [SECURITY.md](https://github.com/Nodrail/agent-plugins/blob/main/SECURITY.md) describes.
+See the [contributing guide](https://github.com/Nodrail/nodrail/blob/main/CONTRIBUTING.md).
+Report vulnerabilities privately via the [security policy](https://github.com/Nodrail/nodrail/blob/main/SECURITY.md).
 
 ## License
 

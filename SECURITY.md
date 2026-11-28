@@ -7,7 +7,7 @@ make a governed action run without Nodrail allowing it is a security problem.
 
 Report it privately, never in a public issue:
 
-- [Open a private advisory](https://github.com/Nodrail/agent-plugins/security/advisories/new) on GitHub (preferred), or
+- [Open a private advisory](https://github.com/Nodrail/nodrail/security/advisories/new) on GitHub (preferred), or
 - write to hello@nodrail.com.
 
 Include the agent and its version, the plugin version, and the tool call. We aim
@@ -29,7 +29,7 @@ them.
 ## How the hook is protected
 
 The hook in `plugins/*/hooks/` is built from
-[@nodrail/client](https://github.com/Nodrail/nodrail-js/tree/main/packages/client).
+[@nodrail/client](https://github.com/Nodrail/nodrail/tree/main/packages/client).
 Each plugin version equals the `@nodrail/client` version it ships, and CI
 checks that the file is byte for byte the one in that version on npm, which
 carries provenance from GitHub Actions. See [GOVERNANCE.md](GOVERNANCE.md) for
