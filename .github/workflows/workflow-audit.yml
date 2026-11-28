@@ -1,10 +1,9 @@
-# Checks workflow changes for the usual ways CI gets taken over: injected
+# Checks workflows for the usual ways CI gets taken over: injected
 # expressions, leaked tokens, over-broad permissions and unpinned actions.
 name: Workflow audit
 
 on:
   pull_request:
-    paths: [".github/**"]
   workflow_dispatch:
 
 permissions:
